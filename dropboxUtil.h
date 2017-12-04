@@ -47,6 +47,7 @@ struct Client {
     std::string user_id;
     bool is_logged;
     long connected_devices[MAX_DEVICES];
+    int sockets[MAX_DEVICES];
     std::vector<FileInfo> files;
 
     //Semaphore sem;
