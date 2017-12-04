@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <memory.h>
 #include <sstream>
+#include <openssl/ssl.h>
 
 //=============================================================================
 // Client
@@ -19,7 +20,7 @@
 Client::Client(std::string user_id) {
     this->user_id = std::move(user_id);
     this->is_logged = false;
-    for (int &connected_device : connected_devices) {
+    for (auto &connected_device : connected_devices) {
         connected_device = EMPTY_DEVICE;
     }
 }
@@ -218,7 +219,7 @@ bool read_file(int from_socket_fd, FILE *out_file, size_t file_size) {
         while ((bytes_read_from_socket = recv(from_socket_fd, buffer, BUFFER_SIZE, 0)) > 0) {
             
             // TODO: Temos que testar isto.
-            ssize_t bytes_written_to_file = fwrite(buffer, sizeof(char), bytes_read_from_socket, out_file);
+            ssize_t bytes_written_to_file = fwrite(buffer, sizeof(char), static_cast<size_t>(bytes_read_from_socket), out_file);
 
             if (bytes_written_to_file < bytes_read_from_socket) {
                 std::cerr << "Erro na escrita do arquivo.\n";
@@ -249,4 +250,166 @@ bool read_file(int from_socket_fd, FILE *out_file, size_t file_size) {
 
     std::cout << "Arquivo recebido!\n";
     return true;
+}
+
+// Versões SSL das mesmas funções
+bool read_socket(SSL *ssl, void *buffer, size_t count) {
+    auto *ptr = (char *) buffer;
+
+    ssize_t bytes_read = 0;
+    while (bytes_read < count) {
+        ssize_t bytes = SSL_read(ssl, ptr, static_cast<int>(count - bytes_read));
+        if (bytes < 1) {
+            return false;
+        }
+        ptr += bytes;
+        bytes_read += bytes;
+    }
+    return true;
+}
+
+bool write_socket(SSL *ssl, const void *buffer, size_t count) {
+    auto *ptr = (char *) buffer;
+
+    ssize_t bytes_written = 0;
+    while (bytes_written < count) {
+        ssize_t bytes = SSL_write(ssl, ptr, static_cast<int>(count - bytes_written));
+        if (bytes < 0) {
+            return false;
+        }
+        ptr += bytes;
+        bytes_written += bytes;
+    }
+    return true;
+}
+
+void send_string(SSL *ssl, const std::string &input) {
+    size_t size = input.length() + 1;
+    char buffer[size];
+    bzero((void *) buffer, size);
+    std::strcpy(buffer, input.c_str());
+
+    ssize_t bytes;
+
+    // Envia o tamanho
+    if (write_socket(ssl, (const void *) &size, sizeof(size))) {
+
+        // Envia os bytes
+        if (!write_socket(ssl, (const void *) buffer, size)) {
+            std::cerr << "Erro ao tentar enviar a string " << input << "\n";
+        }
+    }
+}
+
+std::string receive_string(SSL *ssl) {
+     ssize_t bytes;
+
+    // Lê o tamanho
+    size_t size;
+    bool ok = read_socket(ssl, (void *) &size, sizeof(size));
+
+    if (ok) {
+        // Lê os bytes
+        char buffer[size];
+        if (!read_socket(ssl, (void *) buffer, size)) {
+            std::cout << "Erro ao receber a string\n";
+        }
+        return std::string(buffer);
+    }
+    else {
+        std::cerr << "Erro ao receber o tamanho da string\n";
+        return "";
+    }
+}
+
+void send_bool(SSL *ssl, bool value) {
+    write_socket(ssl, (const void *) &value, sizeof(value));
+}
+
+bool read_bool(SSL *ssl) {
+    bool value;
+    read_socket(ssl, (void *) &value, sizeof(value));
+    return value;
+}
+
+bool send_file(SSL *to_ssl, FILE *in_file, size_t file_size) {
+    char buffer[BUFFER_SIZE];
+    bzero(buffer, BUFFER_SIZE);
+
+    size_t bytes_read_from_file;
+    while ((bytes_read_from_file = fread(buffer, sizeof(char), BUFFER_SIZE, in_file)) > 0) {
+
+        ssize_t bytes_sent = 0;
+        while (bytes_sent < bytes_read_from_file) {
+            if ((bytes_sent += SSL_write(to_ssl, buffer + bytes_sent,
+                                         static_cast<int>(bytes_read_from_file))) < 0) {
+                fprintf(stderr, "Erro ao enviar o arquivo. Errno = %d\n", errno);
+                return false;
+            }
+        }
+        bzero(buffer, BUFFER_SIZE);
+    }
+    if (read_bool(to_ssl)) {
+        std::cout << "Arquivo enviado!\n";
+    }
+    else {
+        std::cerr << "Deu merda\n";
+    }
+    return true;
+}
+
+bool read_file(SSL *from_ssl, FILE *out_file, size_t file_size) {
+    char buffer[BUFFER_SIZE];
+    bzero(buffer, BUFFER_SIZE);
+
+    size_t bytes_received = 0;
+
+    while (bytes_received < file_size) {
+        //std::cout << "Outer loop: " << bytes_received << "\n";
+
+        ssize_t bytes_read_from_socket = 0;
+        while ((bytes_read_from_socket = SSL_read(from_ssl, buffer, BUFFER_SIZE)) > 0) {
+            ssize_t bytes_written_to_file = fwrite(buffer, sizeof(char),
+                                                   static_cast<size_t>(bytes_read_from_socket), out_file);
+            if (bytes_written_to_file < bytes_read_from_socket) {
+                std::cerr << "Erro na escrita do arquivo.\n";
+            }
+
+            bzero(buffer, BUFFER_SIZE);
+            bytes_received += bytes_read_from_socket;
+            if (bytes_received == file_size) {
+                break;
+            }
+        }
+
+        if (bytes_read_from_socket < 0) {
+            if (errno == EAGAIN) {
+                printf("recv() timed out.\n");
+            }
+            else {
+                fprintf(stderr, "recv() failed due to errno = %d\n", errno);
+            }
+            return false;
+        }
+    }
+
+    send_bool(from_ssl, true);
+    std::cout << "Arquivo recebido!\n";
+    return true;
+}
+
+void show_certificate(SSL *ssl) {
+    X509 *cert;
+    char *line;
+
+    cert = SSL_get_peer_certificate(ssl);
+    if (cert != nullptr) {
+        line = X509_NAME_oneline(X509_get_subject_name(cert), nullptr, 0);
+        std::cout << "Subject: " << line << "\n";
+        free(line);
+
+        line = X509_NAME_oneline(X509_get_issuer_name(cert), nullptr, 0);
+        std::cout << "Issuer: " << line << "\n";
+        free(line);
+    }
 }

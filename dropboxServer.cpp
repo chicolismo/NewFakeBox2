@@ -12,7 +12,6 @@
 #include "dropboxClient.h"
 #include <boost/filesystem.hpp>
 
-
 namespace fs = boost::filesystem;
 
 // Globais
@@ -53,6 +52,25 @@ int main(int argc, char **argv) {
     address.sin_port = htons(port_number);
     address.sin_addr.s_addr = htonl(INADDR_ANY);
 
+    // Inicializando engine SSL
+    OpenSSL_add_all_algorithms();
+    SSL_library_init();
+    SSL_load_error_strings();
+    const SSL_METHOD *method = SSLv23_server_method();
+    SSL_CTX *ctx = SSL_CTX_new(method);
+    if (ctx == nullptr) {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+    if (SSL_CTX_use_certificate_file(ctx, "CertFile.pem", SSL_FILETYPE_PEM) != 1) {
+        std::cerr << "Erro ao aplicar o certificado\n";
+        std::exit(1);
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, "KeyFile.pem", SSL_FILETYPE_PEM) != 1) {
+        std::cerr << "Erro ao aplicar a chave\n";
+        std::exit(1);
+    }
+
     // Criando o socket
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -88,9 +106,18 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        // Adicionando SSL ao socket
+        SSL *new_ssl= SSL_new(ctx);
+        SSL_set_fd(new_ssl, new_socket_fd);
+        if (SSL_accept(new_ssl) < 1) {
+            std::cerr << "Erro ao aceitar o ssl.\n";
+            close(socket_fd);
+            SSL_clear(new_ssl);
+        }
+
         ConnectionType type;
         bzero(&type, sizeof(type));
-        ssize_t bytes = read_socket(new_socket_fd, (void *) &type, sizeof(type));
+        ssize_t bytes = read_socket(new_ssl, (void *) &type, sizeof(type));
         if (bytes == -1) {
             std::cerr << "Erro ao ler o tipo de conexão do cliente\n";
             close(socket_fd);
@@ -101,7 +128,7 @@ int main(int argc, char **argv) {
         std::thread thread;
         if (type == Normal) {
             std::cout << "Running normal thread\n";
-            thread = std::thread(run_normal_thread, new_socket_fd);
+            thread = std::thread(run_normal_thread, new_ssl);
             thread.detach();
         }
         else {
@@ -127,23 +154,23 @@ int main(int argc, char **argv) {
  * encerra a thread.
  * ----------------------------------------------------------------------------
  */
-void run_normal_thread(int client_socket_fd) {
+void run_normal_thread(SSL *client_ssl) {
 
     // Temos que ler o user_id
-    std::string user_id = receive_string(client_socket_fd);
+    std::string user_id = receive_string(client_ssl);
 
     std::cout << user_id << " está tentando se conectar\n";
 
     // Tenta conectar
     bool is_connected = false;
-    is_connected = connect_client(user_id, client_socket_fd);
-    write_socket(client_socket_fd, (const void *) &is_connected, sizeof(is_connected));
+    is_connected = connect_client(user_id, client_ssl);
+    write_socket(client_ssl, (const void *) &is_connected, sizeof(is_connected));
 
     // Se a conexão for bem sucedida, rodar função que espera pelos comandos
     if (is_connected) {
         std::cout << user_id << " se conectou ao servidor\n";
 
-        run_user_interface(user_id, client_socket_fd);
+        run_user_interface(user_id, client_ssl);
     }
 
     // Se a conexão for mal sucedida, retorna;
@@ -209,7 +236,7 @@ void initialize_clients() {
  * Retorna um booleano indicando o sucesso da conexão.
  * ----------------------------------------------------------------------------
  */
-bool connect_client(std::string user_id, int client_socket_fd) {
+bool connect_client(const std::string &user_id, SSL *client_ssl) {
     // Trava a função para apenas uma thread de cada vez.
     std::lock_guard<std::mutex> lock(connection_mutex);
 
@@ -224,10 +251,10 @@ bool connect_client(std::string user_id, int client_socket_fd) {
         ok = true;
     }
     else {
-        for (int &device : it->second->connected_devices) {
+        for (auto &device : it->second->connected_devices) {
             if (device == EMPTY_DEVICE) {
                 it->second->is_logged = true;
-                device = client_socket_fd;
+                device = (long) &client_ssl;
                 ok = true;
                 break;
             }
@@ -247,7 +274,7 @@ bool connect_client(std::string user_id, int client_socket_fd) {
  * global.
  * ----------------------------------------------------------------------------
  */
-void disconnect_client(std::string user_id, int client_socket_fd) {
+void disconnect_client(const std::string &user_id, SSL *client_ssl) {
     std::lock_guard<std::mutex> lock(connection_mutex);
 
     auto it = clients.find(user_id);
@@ -267,13 +294,14 @@ void disconnect_client(std::string user_id, int client_socket_fd) {
             it->second->connected_devices[0] = EMPTY_DEVICE;
             it->second->is_logged = false;
         }
-        else if (it->second->connected_devices[0] == client_socket_fd) {
+        else if (it->second->connected_devices[0] == (long) &client_ssl) {
             it->second->connected_devices[0] = EMPTY_DEVICE;
         }
         else {
             it->second->connected_devices[1] = EMPTY_DEVICE;
         }
-        close(client_socket_fd);
+        //close(client_socket_fd);
+        SSL_clear(client_ssl);
     }
 }
 
@@ -316,11 +344,11 @@ void create_user_dir(std::string user_id) {
  * mesmo user_id) pode executar o próximo comando.
  * -----------------------------------------------------------------------------
  */
-void run_user_interface(const std::string user_id, int client_socket_fd) {
+void run_user_interface(const std::string user_id, SSL *client_ssl) {
     Command command = Exit;
 
     do {
-        read_socket(client_socket_fd, (void *) &command, sizeof(command));
+        read_socket(client_ssl, (void *) &command, sizeof(command));
 
         // uma vez recebido o comando, devemos travar o usuário
         lock_user(user_id);
@@ -330,32 +358,32 @@ void run_user_interface(const std::string user_id, int client_socket_fd) {
         switch (command) {
         case Upload:
             //std::cout << "Upload Requested\n";
-            filename = receive_string(client_socket_fd);
+            filename = receive_string(client_ssl);
 
             //std::cout << "Arquivo a ser rebido: " << filename << "\n";
-            receive_file(user_id, filename, client_socket_fd);
+            receive_file(user_id, filename, client_ssl);
             break;
 
         case Download:
             //std::cout << "Download Requested\n";
-            filename = receive_string(client_socket_fd);
-            send_file(user_id, filename, client_socket_fd);
+            filename = receive_string(client_ssl);
+            send_file(user_id, filename, client_ssl);
             break;
 
         case Delete:
             //std::cout << "Delete Requested\n";
-            filename = receive_string(client_socket_fd);
-            delete_file(user_id, filename, client_socket_fd);
+            filename = receive_string(client_ssl);
+            delete_file(user_id, filename, client_ssl);
             break;
 
         case ListServer:
             //std::cout << "ListServer Requested\n";
-            send_file_infos(user_id, client_socket_fd);
+            send_file_infos(user_id, client_ssl);
             break;
 
         case Exit:
             //std::cout << "Exit Requested\n";
-            disconnect_client(user_id, client_socket_fd);
+            disconnect_client(user_id, client_ssl);
             break;
 
         default:
@@ -383,7 +411,7 @@ void run_user_interface(const std::string user_id, int client_socket_fd) {
  * hora de abrir o arquivo ele será recebido do cliente.
  * -----------------------------------------------------------------------------
  */
-void receive_file(std::string user_id, std::string filename, int client_socket_fd) {
+void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
 
     fs::path absolute_path = server_dir / fs::path(user_id) / fs::path(filename);
 
@@ -391,17 +419,17 @@ void receive_file(std::string user_id, std::string filename, int client_socket_f
 
     // Vamos ler o tamanho do arquivo!
     size_t file_size;
-    read_socket(client_socket_fd, (void *) &file_size, sizeof(file_size));
+    read_socket(client_ssl, (void *) &file_size, sizeof(file_size));
 
     std::cout << "Tamanho do arquivo recebido: " << file_size << " bytes\n";
 
     // Recebendo a data de modificação
     time_t time;
-    read_socket(client_socket_fd, (void *) &time, sizeof(time));
+    read_socket(client_ssl, (void *) &time, sizeof(time));
 
     // Temos que ver se o arquivo existe e se é mais antigo e se devemos recebê-lo.
     bool should_download = !(fs::exists(absolute_path) && (fs::last_write_time(absolute_path) >= time));
-    send_bool(client_socket_fd, should_download);
+    send_bool(client_ssl, should_download);
 
     if (!should_download) {
         return;
@@ -411,16 +439,16 @@ void receive_file(std::string user_id, std::string filename, int client_socket_f
     FILE *file = fopen(absolute_path.c_str(), "wb");
     if (file == nullptr) {
         std::cerr << "Arquivo " << absolute_path << " não pode ser aberto\n";
-        send_bool(client_socket_fd, false);
+        send_bool(client_ssl, false);
         return;
     }
 
-    send_bool(client_socket_fd, true);
+    send_bool(client_ssl, true);
     // Vamos receber os bytes do arquivo.
     std::cout << "Preparando para receber os bytes do arquivo\n";
 
     // TODO: Receber o arquivo
-    read_file(client_socket_fd, file, file_size);
+    read_file(client_ssl, file, file_size);
     fclose(file);
 
     std::cout << "Arquivo " << absolute_path.string() << " recebido\n";
@@ -447,7 +475,7 @@ void receive_file(std::string user_id, std::string filename, int client_socket_f
  * a fim de manter o arquivo sincronizado.
  * -----------------------------------------------------------------------------
  */
-void send_file(std::string user_id, std::string filename, int client_socket_fd) {
+void send_file(std::string user_id, std::string filename, SSL *client_ssl) {
 
     // Determina o caminho absoluto do arquivo no servidor
     fs::path absolute_path = server_dir / fs::path(user_id) / fs::path(filename);
@@ -465,7 +493,7 @@ void send_file(std::string user_id, std::string filename, int client_socket_fd) 
     }
 
     // Indica ao usuário se o arquivo existe ou se foi possível abri-lo
-    send_bool(client_socket_fd, file_ok);
+    send_bool(client_ssl, file_ok);
 
     if (file_ok) {
         std::cout << "Arquivo ok\n";
@@ -477,15 +505,15 @@ void send_file(std::string user_id, std::string filename, int client_socket_fd) 
 
     // Caso o arquivo esteja ok, envia o tamanho do arquivo
     size_t file_size = fs::file_size(absolute_path);
-    write_socket(client_socket_fd, (const void *) &file_size, sizeof(file_size));
+    write_socket(client_ssl, (const void *) &file_size, sizeof(file_size));
 
     // Recebe a confirmação que o cliente conseguiu criar o arquivo localmente,
     // e está esperando os bytes.
-    bool ok = read_bool(client_socket_fd);
+    bool ok = read_bool(client_ssl);
 
     if (ok) {
         // Envia os bytes do arquivo ao cliente
-        send_file(client_socket_fd, file, file_size);
+        send_file(client_ssl, file, file_size);
     }
     fclose(file);
 
@@ -495,7 +523,7 @@ void send_file(std::string user_id, std::string filename, int client_socket_fd) 
     time_t timestamp = fs::last_write_time(absolute_path);
     std::cout << "Last write time a ser enviado: " << timestamp << "\n";
     // Envia a data de modificação
-    write_socket(client_socket_fd, (const void *) &timestamp, sizeof(timestamp));
+    write_socket(client_ssl, (const void *) &timestamp, sizeof(timestamp));
     std::cout << "Data de criação enviada\n";
 
 }
@@ -510,7 +538,7 @@ void send_file(std::string user_id, std::string filename, int client_socket_fd) 
  * remover o arquivo. Se o arquivo não existir, não faz nada.
  * -----------------------------------------------------------------------------
  */
-void delete_file(std::string user_id, std::string filename, int client_socket_fd) {
+void delete_file(std::string user_id, std::string filename, SSL *client_ssl) {
 
     auto it = clients.find(user_id);
     if (it == clients.end()) {
@@ -608,7 +636,7 @@ void update_files(std::string user_id,
  * é enviado.
  * ----------------------------------------------------------------------------
  */
-void send_file_infos(std::string user_id, int client_socket_fd) {
+void send_file_infos(std::string user_id, SSL *client_ssl) {
     auto it = clients.find(user_id);
 
     // Testa se o cliente foi encontrado
@@ -622,10 +650,10 @@ void send_file_infos(std::string user_id, int client_socket_fd) {
     size_t n = client->files.size();
 
     // Envia o tamanho da lista
-    write_socket(client_socket_fd, (const void *) &n, sizeof(n));
+    write_socket(client_ssl, (const void *) &n, sizeof(n));
 
     for (int i = 0; i < n; ++i) {
-        write_socket(client_socket_fd, (const void *) &client->files[i], sizeof(client->files[i]));
+        write_socket(client_ssl, (const void *) &client->files[i], sizeof(client->files[i]));
     }
 }
 

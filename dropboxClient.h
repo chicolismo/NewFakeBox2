@@ -3,13 +3,16 @@
 
 #include <string>
 #include <vector>
+#include <openssl/ossl_typ.h>
 #include "dropboxUtil.h"
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #define CONNECTION_SUCCESS = 0
 #define CONNECTION_ERROR = (-1)
 
 // Possíveis resultados da tentativa de conexão
-enum ConnectionResult { Success, Error };
+enum ConnectionResult { Success, Error, SSLError };
 
 void print_interface();
 void run_interface();
@@ -19,7 +22,7 @@ void create_sync_dir();
 void list_local_files();
 void list_server_files();
 std::vector<FileInfo> get_server_files();
-ConnectionResult connect_server(std::string host, uint16_t port);
+ConnectionResult connect_server(std::string host, uint16_t port, SSL_CTX *context);
 void sync_client();
 void send_file(std::string filename);
 void get_file(std::string filename);

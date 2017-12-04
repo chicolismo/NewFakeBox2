@@ -11,6 +11,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <openssl/ossl_typ.h>
 
 enum ConnectionType { Normal, Sync };
 
@@ -45,7 +46,7 @@ struct FileInfo {
 struct Client {
     std::string user_id;
     bool is_logged;
-    int connected_devices[MAX_DEVICES];
+    long connected_devices[MAX_DEVICES];
     std::vector<FileInfo> files;
 
     //Semaphore sem;
@@ -71,5 +72,17 @@ bool read_bool(int socket_fd);
 
 bool send_file(int to_socket_fd, FILE *in_file, size_t file_size);
 bool read_file(int from_socket_fd, FILE *out_file, size_t file_size);
+
+// Versões SSL das mesmas funções
+bool read_socket(SSL *ssl, void *buffer, size_t count);
+bool write_socket(SSL *ssl, const void *buffer, size_t count);
+void send_string(SSL *ssl, const std::string &input);
+std::string receive_string(SSL *ssl);
+void send_bool(SSL *ssl, bool value);
+bool read_bool(SSL *ssl);
+bool send_file(SSL *to_ssl, FILE *in_file, size_t file_size);
+bool read_file(SSL *from_ssl, FILE *out_file, size_t file_size);
+
+void show_certificate(SSL *ssl);
 
 #endif

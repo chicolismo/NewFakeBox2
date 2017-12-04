@@ -91,7 +91,7 @@ sockaddr_in server_address{};
  * ----------------------------------------------------------------------------
  */
 int socket_fd;
-
+SSL *ssl;
 
 /*
  * ----------------------------------------------------------------------------
@@ -135,11 +135,36 @@ int main(int argc, char **argv) {
     char *end;
     port_number = static_cast<uint16_t>(std::strtol(argv[3], &end, 10));
 
+    std::cout << "Inicializando SSL\n";
+
+    OPENSSL_add_all_algorithms_conf();
+    SSL_library_init();
+    SSL_load_error_strings();
+
+    const SSL_METHOD *method = SSLv23_client_method();
+    SSL_CTX *ctx = SSL_CTX_new(method);
+
+    // O contexto deve ser criado com sucesso!
+    if (ctx == nullptr) {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+
+    std::cout << "Tentando se conectar ao servidor\n";
+
     // Tenta se conectar ao servidor.
-    if (connect_server(hostname, port_number) == ConnectionResult::Error) {
+    ConnectionResult result = connect_server(hostname, port_number, ctx);
+    if (result == ConnectionResult::Error) {
         std::cerr << "Erro ao se conectar com o servidor\n";
         std::exit(1);
     }
+    else if (result == ConnectionResult::SSLError) {
+        std::cerr << "Erro ao se conectar com o servidor via SSL\n";
+        std::exit(1);
+    }
+
+    // Imprime o certificado
+    show_certificate(ssl);
 
     // Cria o diretório de sincronização
     create_sync_dir();
@@ -209,7 +234,7 @@ void run_sync_thread() {
         // O nome do arquivo que causou o evento, sem o caminho absoluto
         std::string filename = event.path.filename().string();
 
-        std::cout << filename << " causou o evento\n";
+        //std::cout << filename << " causou o evento\n";
 
         if (mask & IN_MOVED_FROM ||
             mask & IN_DELETE ||
@@ -279,7 +304,7 @@ void run_get_sync_dir_thread() {
  * Retorna um enum ConnectionResult com o resultado.
  * ----------------------------------------------------------------------------
  */
-ConnectionResult connect_server(std::string hostname, uint16_t port) {
+ConnectionResult connect_server(std::string hostname, uint16_t port, SSL_CTX *context) {
     hostent *server = gethostbyname(hostname.c_str());
 
     if (server == nullptr) {
@@ -304,19 +329,28 @@ ConnectionResult connect_server(std::string hostname, uint16_t port) {
         return ConnectionResult::Error;
     }
 
+    // Anexando ssl (global) ao socket
+    ssl = SSL_new(context);
+    SSL_set_fd(ssl, socket_fd);
+    if (SSL_connect(ssl) == -1) {
+        std::cerr << "Erro ao conectar com ssl\n";
+        ERR_print_errors_fp(stderr);
+        return ConnectionResult::SSLError;
+    }
+
     // Envia o tipo de conexão ao servidor
     ConnectionType type = ConnectionType::Normal;
-    ssize_t bytes = write_socket(socket_fd, (const void *) &type, sizeof(type));
+    ssize_t bytes = write_socket(ssl, (const void *) &type, sizeof(type));
     if (bytes == -1) {
         std::cerr << "Erro enviando o tipo de conexão ao servidor";
         return ConnectionResult::Error;
     }
 
-    send_string(socket_fd, user_id);
+    send_string(ssl, user_id);
 
     // Recebe o sinal de ok do servidor
     bool ok = false;
-    read_socket(socket_fd, (void *) &ok, sizeof(ok));
+    read_socket(ssl, (void *) &ok, sizeof(ok));
 
     if (!ok) {
         return ConnectionResult::Error;
@@ -439,28 +473,28 @@ void send_file(std::string absolute_filename) {
 
             // Envia o comando
             Command command = Upload;
-            write_socket(socket_fd, (const void *) &command, sizeof(command));
+            write_socket(ssl, (const void *) &command, sizeof(command));
 
             // Envia o nome do arquivo
             std::string filename = absolute_path.filename().string();
-            send_string(socket_fd, filename);
+            send_string(ssl, filename);
 
             // Envia o tanho do arquivo
             size_t file_size = fs::file_size(absolute_path);
-            write_socket(socket_fd, (const void *) &file_size, sizeof(file_size));
+            write_socket(ssl, (const void *) &file_size, sizeof(file_size));
 
             // Envia a data de modificação do arquivo
             time_t time = fs::last_write_time(absolute_path);
-            write_socket(socket_fd, (const void *) &time, sizeof(time));
+            write_socket(ssl, (const void *) &time, sizeof(time));
 
             // Recebe a confirmação de upload do servidor.
-            if (!read_bool(socket_fd)) {
+            if (!read_bool(ssl)) {
                 std::cout << "Arquivo " << absolute_path.string() << " não precisa ser enviado\n";
                 fclose(file);
                 return;
             }
 
-            bool file_open_ok = read_bool(socket_fd);
+            bool file_open_ok = read_bool(ssl);
             if (!file_open_ok) {
                 std::cerr << "O arquivo não conseguiu ser aberto no servidor\n";
                 fclose(file);
@@ -469,7 +503,7 @@ void send_file(std::string absolute_filename) {
             //std::cout << "Preparando para enviar os bytes do arquivo\n";
 
             // Se o servidor quiser o arquivo, envia os bytes
-            send_file(socket_fd, file, file_size);
+            send_file(ssl, file, file_size);
 
             fclose(file);
         }
@@ -510,18 +544,18 @@ void get_file(std::string filename) {
 void get_file(std::string filename, bool current_path) {
 
     Command command = Download;
-    write_socket(socket_fd, (const void *) &command, sizeof(command));
+    write_socket(ssl, (const void *) &command, sizeof(command));
 
-    send_string(socket_fd, filename);
+    send_string(ssl, filename);
 
-    bool exists = read_bool(socket_fd);
+    bool exists = read_bool(ssl);
     if (!exists) {
         std::cerr << "Servidor informou que arquivo não existe\n";
         return;
     }
 
     size_t file_size;
-    read_socket(socket_fd, (void *) &file_size, sizeof(file_size));
+    read_socket(ssl, (void *) &file_size, sizeof(file_size));
 
     fs::path absolute_path;
     if (current_path) {
@@ -534,17 +568,17 @@ void get_file(std::string filename, bool current_path) {
     FILE *file = fopen(absolute_path.c_str(), "wb");
     if (file == nullptr) {
         std::cout << "Erro ao abrir o arquivo para escrita\n";
-        send_bool(socket_fd, false);
+        send_bool(ssl, false);
         return;
     }
-    send_bool(socket_fd, true);
+    send_bool(ssl, true);
 
-    read_file(socket_fd, file, file_size);
+    read_file(ssl, file, file_size);
     fclose(file);
 
 
     time_t time;
-    read_socket(socket_fd, (void *) &time, sizeof(time));
+    read_socket(ssl, (void *) &time, sizeof(time));
 
     fs::last_write_time(absolute_path, time);
 
@@ -561,8 +595,9 @@ void get_file(std::string filename, bool current_path) {
  */
 void close_connection() {
     Command command = Exit;
-    write_socket(socket_fd, (const void *) &command, sizeof(command));
+    write_socket(ssl, (const void *) &command, sizeof(command));
     close(socket_fd);
+    SSL_clear(ssl);
 }
 
 
@@ -664,11 +699,11 @@ std::vector<FileInfo> get_server_files() {
 
     // Envia o comando para listar os arquivos.
     Command command = ListServer;
-    write_socket(socket_fd, (const void *) &command, sizeof(command));
+    write_socket(ssl, (const void *) &command, sizeof(command));
 
     // Lê o tamanho do vetor
     size_t n;
-    read_socket(socket_fd, (void *) &n, sizeof(n));
+    read_socket(ssl, (void *) &n, sizeof(n));
 
     std::vector<FileInfo> files;
     files.reserve(n);
@@ -676,7 +711,7 @@ std::vector<FileInfo> get_server_files() {
     // Recebe os membros do vetor e o recria localmente.
     for (int i = 0; i < n; ++i) {
         FileInfo file_info;
-        read_socket(socket_fd, (void *) &file_info, sizeof(file_info));
+        read_socket(ssl, (void *) &file_info, sizeof(file_info));
         files.push_back(file_info);
     }
 
@@ -723,8 +758,8 @@ void send_delete_command(std::string filename) {
     Command command = Delete;
 
     // Envia o comando de Delete para o servidor
-    if (write_socket(socket_fd, (void *) &command, sizeof(command))) {
-        send_string(socket_fd, filename);
+    if (write_socket(ssl, (void *) &command, sizeof(command))) {
+        send_string(ssl, filename);
     }
 }
 
