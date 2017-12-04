@@ -1,0 +1,11 @@
+.idea
+DropBox.cbp
+chico
+.DS_Store
+server
+client
+Makefile
+CMakeFiles
+CMakeCache.txt
+cmake_install.cmake
+*~
