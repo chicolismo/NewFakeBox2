@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
         std::thread thread;
         if (type == Normal) {
             std::cout << "Running normal thread\n";
-            thread = std::thread(run_normal_thread, new_ssl);
+            thread = std::thread(run_normal_thread, new_ssl, new_socket_fd);
             thread.detach();
         }
         else {
@@ -154,7 +154,7 @@ int main(int argc, char **argv) {
  * encerra a thread.
  * ----------------------------------------------------------------------------
  */
-void run_normal_thread(SSL *client_ssl) {
+void run_normal_thread(SSL *client_ssl, int client_socket_fd) {
 
     // Temos que ler o user_id
     std::string user_id = receive_string(client_ssl);
@@ -170,7 +170,10 @@ void run_normal_thread(SSL *client_ssl) {
     if (is_connected) {
         std::cout << user_id << " se conectou ao servidor\n";
 
-        run_user_interface(user_id, client_ssl);
+        run_user_interface(user_id, client_ssl, client_socket_fd);
+    } else {
+        SSL_shutdown(client_ssl);
+        close(client_socket_fd);
     }
 
     // Se a conexão for mal sucedida, retorna;
@@ -274,7 +277,7 @@ bool connect_client(const std::string &user_id, SSL *client_ssl) {
  * global.
  * ----------------------------------------------------------------------------
  */
-void disconnect_client(const std::string &user_id, SSL *client_ssl) {
+void disconnect_client(const std::string &user_id, SSL *client_ssl, int client_socket_fd) {
     std::lock_guard<std::mutex> lock(connection_mutex);
 
     auto it = clients.find(user_id);
@@ -300,8 +303,8 @@ void disconnect_client(const std::string &user_id, SSL *client_ssl) {
         else {
             it->second->connected_devices[1] = EMPTY_DEVICE;
         }
-        //close(client_socket_fd);
-        SSL_clear(client_ssl);
+        SSL_shutdown(client_ssl);
+        close(client_socket_fd);
     }
 }
 
@@ -344,7 +347,7 @@ void create_user_dir(std::string user_id) {
  * mesmo user_id) pode executar o próximo comando.
  * -----------------------------------------------------------------------------
  */
-void run_user_interface(const std::string user_id, SSL *client_ssl) {
+void run_user_interface(const std::string user_id, SSL *client_ssl, int client_socket_fd) {
     Command command = Exit;
 
     do {
@@ -383,7 +386,7 @@ void run_user_interface(const std::string user_id, SSL *client_ssl) {
 
         case Exit:
             //std::cout << "Exit Requested\n";
-            disconnect_client(user_id, client_ssl);
+            disconnect_client(user_id, client_ssl, client_socket_fd);
             break;
 
         default:
