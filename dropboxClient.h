@@ -12,7 +12,7 @@
 #define CONNECTION_ERROR = (-1)
 
 // Possíveis resultados da tentativa de conexão
-enum ConnectionResult { Success, Error, SSLError };
+enum ConnectionResult { Success, Error, SSLError, CantAccept };
 
 void print_interface();
 void run_interface();

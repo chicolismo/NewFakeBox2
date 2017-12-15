@@ -15,12 +15,18 @@
 #include <chrono>
 #include <netdb.h>
 #include <set>
+#include <utility>
+#include "front_end.h"
 
 namespace fs = boost::filesystem;
 
 //=============================================================================
 // Globais
 //=============================================================================
+
+std::vector<Server> servers;
+
+bool client_is_synchronizing = false;
 
 
 /*
@@ -75,16 +81,6 @@ uint16_t port_number;
 
 /*
  * ----------------------------------------------------------------------------
- * server_address
- * ----------------------------------------------------------------------------
- * O struct com as informações do endereço do servidor.
- * ----------------------------------------------------------------------------
- */
-sockaddr_in server_address{};
-
-
-/*
- * ----------------------------------------------------------------------------
  * socket_fd
  * ----------------------------------------------------------------------------
  * O socket com o qual o cliente se comunica e envia comandos ao servidor.
@@ -130,10 +126,12 @@ int main(int argc, char **argv) {
 
     user_id = std::string(argv[1]);
 
+    /*
     std::string hostname = std::string(argv[2]);
 
     char *end;
     port_number = static_cast<uint16_t>(std::strtol(argv[3], &end, 10));
+    */
 
     std::cout << "Inicializando SSL\n";
 
@@ -141,6 +139,7 @@ int main(int argc, char **argv) {
     SSL_library_init();
     SSL_load_error_strings();
 
+    /*
     const SSL_METHOD *method = SSLv23_client_method();
     SSL_CTX *ctx = SSL_CTX_new(method);
 
@@ -160,6 +159,14 @@ int main(int argc, char **argv) {
     }
     else if (result == ConnectionResult::SSLError) {
         std::cerr << "Erro ao se conectar com o servidor via SSL\n";
+        std::exit(1);
+    }
+    */
+
+    // Tenta se conectar a algum dos servidores
+    ConnectionResult result = connect_servers(user_id, &socket_fd, &ssl);
+    if (result == ConnectionResult::Error) {
+        std::cerr << "Erro ao se conectar a qualquer um do servidores\n";
         std::exit(1);
     }
 
@@ -229,6 +236,12 @@ void run_sync_thread() {
 
     while (true) {
         FileSystemEvent event = inotify.getNextEvent();
+
+        // Se estivermos fazendo a sincronização com o servidor, todos os eventos devem ser ignorados.
+        if (client_is_synchronizing) {
+            continue;
+        }
+
         auto mask = event.mask;
 
         // O nome do arquivo que causou o evento, sem o caminho absoluto
@@ -305,6 +318,8 @@ void run_get_sync_dir_thread() {
  * ----------------------------------------------------------------------------
  */
 ConnectionResult connect_server(std::string hostname, uint16_t port, SSL_CTX *context) {
+    sockaddr_in server_address{};
+
     hostent *server = gethostbyname(hostname.c_str());
 
     if (server == nullptr) {
@@ -331,6 +346,7 @@ ConnectionResult connect_server(std::string hostname, uint16_t port, SSL_CTX *co
 
     // Anexando ssl (global) ao socket
     ssl = SSL_new(context);
+
     SSL_set_fd(ssl, socket_fd);
     if (SSL_connect(ssl) == -1) {
         std::cerr << "Erro ao conectar com ssl\n";
@@ -524,7 +540,7 @@ void send_file(std::string absolute_filename) {
  * ----------------------------------------------------------------------------
  */
 void get_file(std::string filename) {
-    get_file(filename, true);
+    get_file(std::move(filename), true);
 }
 
 
@@ -543,6 +559,10 @@ void get_file(std::string filename) {
  */
 void get_file(std::string filename, bool current_path) {
 
+    // O Inotify deve ignorar esse evento, porque estamos
+    // baixando um arquivo do servidor.
+    client_is_synchronizing = true;
+
     Command command = Download;
     write_socket(ssl, (const void *) &command, sizeof(command));
 
@@ -551,6 +571,9 @@ void get_file(std::string filename, bool current_path) {
     bool exists = read_bool(ssl);
     if (!exists) {
         std::cerr << "Servidor informou que arquivo não existe\n";
+
+        // Desbloqueia o inotify
+        client_is_synchronizing = false;
         return;
     }
 
@@ -569,6 +592,9 @@ void get_file(std::string filename, bool current_path) {
     if (file == nullptr) {
         std::cout << "Erro ao abrir o arquivo para escrita\n";
         send_bool(ssl, false);
+
+        // Desbloqueia o inotify
+        client_is_synchronizing = false;
         return;
     }
     send_bool(ssl, true);
@@ -583,6 +609,9 @@ void get_file(std::string filename, bool current_path) {
     fs::last_write_time(absolute_path, time);
 
     std::cout << "Arquivo " << filename << " recebido com sucesso\n";
+
+    // Desbloqueia o inotify
+    client_is_synchronizing = false;
 }
 
 
