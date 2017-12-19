@@ -30,5 +30,8 @@ void delete_file(std::string filename);
 void send_delete_command(std::string filename);
 void close_connection();
 void get_file(std::string filename, bool current_path);
+void run_check_server_status_thread();
+void check_server();
+void sigpipe_handler();
 
 #endif

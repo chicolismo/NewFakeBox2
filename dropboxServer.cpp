@@ -359,39 +359,43 @@ void run_user_interface(const std::string user_id, SSL *client_ssl, int client_s
         std::string filename{};
 
         switch (command) {
-        case Upload:
-            //std::cout << "Upload Requested\n";
-            filename = receive_string(client_ssl);
+            case IsAlive:
+                // Apenas é necessário ler o comando.
+                break;
 
-            //std::cout << "Arquivo a ser rebido: " << filename << "\n";
-            receive_file(user_id, filename, client_ssl);
-            break;
+            case Upload:
+                //std::cout << "Upload Requested\n";
+                filename = receive_string(client_ssl);
 
-        case Download:
-            //std::cout << "Download Requested\n";
-            filename = receive_string(client_ssl);
-            send_file(user_id, filename, client_ssl);
-            break;
+                //std::cout << "Arquivo a ser rebido: " << filename << "\n";
+                receive_file(user_id, filename, client_ssl);
+                break;
 
-        case Delete:
-            //std::cout << "Delete Requested\n";
-            filename = receive_string(client_ssl);
-            delete_file(user_id, filename, client_ssl);
-            break;
+            case Download:
+                //std::cout << "Download Requested\n";
+                filename = receive_string(client_ssl);
+                send_file(user_id, filename, client_ssl);
+                break;
 
-        case ListServer:
-            //std::cout << "ListServer Requested\n";
-            send_file_infos(user_id, client_ssl);
-            break;
+            case Delete:
+                //std::cout << "Delete Requested\n";
+                filename = receive_string(client_ssl);
+                delete_file(user_id, filename, client_ssl);
+                break;
 
-        case Exit:
-            //std::cout << "Exit Requested\n";
-            disconnect_client(user_id, client_ssl, client_socket_fd);
-            break;
+            case ListServer:
+                //std::cout << "ListServer Requested\n";
+                send_file_infos(user_id, client_ssl);
+                break;
 
-        default:
-            std::cout << "Comando não reconhecido\n";
-            break;
+            case Exit:
+                //std::cout << "Exit Requested\n";
+                disconnect_client(user_id, client_ssl, client_socket_fd);
+                break;
+
+            default:
+                std::cout << "Comando não reconhecido\n";
+                break;
         }
 
         unlock_user(user_id);

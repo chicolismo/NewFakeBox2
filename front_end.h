@@ -23,5 +23,4 @@ void print_servers(const std::vector<Server> &servers);
 ConnectionResult connect_servers(const std::string &user_id, int *socket_fd, SSL **ssl);
 ConnectionResult connect_server(Server &server, const std::string &user_id, SSL_CTX *context);
 
-
 #endif //__FRONT_END_H__

@@ -15,7 +15,7 @@
 
 enum ConnectionType { Normal, Sync };
 
-enum Command { Upload, Download, Delete, ListServer, Exit };
+enum Command { Upload, Download, Delete, ListServer, Exit, IsAlive };
 
 struct FileInfo {
     char filename_[MAX_NAME_SIZE];

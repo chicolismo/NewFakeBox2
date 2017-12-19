@@ -17,6 +17,7 @@
 #include <set>
 #include <utility>
 #include "front_end.h"
+#include <csignal>
 
 namespace fs = boost::filesystem;
 
@@ -26,8 +27,9 @@ namespace fs = boost::filesystem;
 
 std::vector<Server> servers;
 
-bool client_is_synchronizing = false;
+bool downloading_file = false;
 
+bool socket_ok = false;
 
 /*
  * ----------------------------------------------------------------------------
@@ -163,12 +165,17 @@ int main(int argc, char **argv) {
     }
     */
 
+    // Instalando sigpipe handler
+    signal(SIGPIPE, reinterpret_cast<__sighandler_t>(sigpipe_handler));
+
     // Tenta se conectar a algum dos servidores
     ConnectionResult result = connect_servers(user_id, &socket_fd, &ssl);
     if (result == ConnectionResult::Error) {
         std::cerr << "Erro ao se conectar a qualquer um do servidores\n";
         std::exit(1);
     }
+
+    socket_ok = true;
 
     // Imprime o certificado
     show_certificate(ssl);
@@ -182,16 +189,25 @@ int main(int argc, char **argv) {
     // Manda a global inotify cuidar do diretório de sincronização
     inotify.watchDirectoryRecursively(user_dir);
 
-    // Cria thread para mater o cliente sincronizado com o servidor.
-    // std::thread get_dir_sync_thread;
-    // get_dir_sync_thread = std::thread(run_get_sync_dir_thread);
-    // if (!get_dir_sync_thread.joinable()) {
-    //     std::cerr << "Erro ao criar thread de get_dir_sync\n";
-    //     close_connection();
-    //     return 1;
-    // };
-    // get_dir_sync_thread.detach();
+    // Cria thread para verificar a situação do servidor principal
+    std::thread check_server_status;
+    check_server_status = std::thread(run_check_server_status_thread);
+    if (!check_server_status.joinable()) {
+        std::cerr << "Erro ao criar thread de check_server_status\n";
+        close_connection();
+        return 1;
+    }
+    check_server_status.detach();
 
+    //Cria thread para mater o cliente sincronizado com o servidor.
+    std::thread get_dir_sync_thread;
+    get_dir_sync_thread = std::thread(run_get_sync_dir_thread);
+    if (!get_dir_sync_thread.joinable()) {
+        std::cerr << "Erro ao criar thread de get_dir_sync\n";
+        close_connection();
+        return 1;
+    };
+    get_dir_sync_thread.detach();
 
     // Cria a thread de sincronização, para o inotify
     std::thread sync_thread;
@@ -208,6 +224,17 @@ int main(int argc, char **argv) {
     run_interface();
 }
 
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+void run_check_server_status_thread() {
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::lock_guard<std::mutex> lock(command_mutex);
+        check_server();
+    }
+}
+#pragma clang diagnostic pop
 
 #pragma clang diagnostic push // Não precisamos de warnings para loops infinitos
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
@@ -237,8 +264,14 @@ void run_sync_thread() {
     while (true) {
         FileSystemEvent event = inotify.getNextEvent();
 
-        // Se estivermos fazendo a sincronização com o servidor, todos os eventos devem ser ignorados.
-        if (client_is_synchronizing) {
+        // Se estivermos baixando um arquivo do servidor, todos os eventos devem ser ignorados,
+        // porque não queremos enviar o mesmo arquivo de voltar ao servidor.
+        if (downloading_file) {
+            continue;
+        }
+
+        // Não queremos enviar comandos caso o socket não esteja funcionando.
+        if (!socket_ok) {
             continue;
         }
 
@@ -264,6 +297,8 @@ void run_sync_thread() {
 
         if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
             std::lock_guard<std::mutex> lock(command_mutex);
+
+            check_server();
             send_delete_command(filename);
         }
         else if (mask & IN_MOVED_TO || mask & IN_CREATE || mask & IN_MODIFY) {
@@ -271,6 +306,8 @@ void run_sync_thread() {
             if (fs::is_regular_file(event.path)) {
                 std::lock_guard<std::mutex> lock(command_mutex);
                 // O caminho absoluto é necessário na hora de enviar arquivos.
+
+                check_server();
                 send_file(event.path.string());
             }
         }
@@ -297,6 +334,7 @@ void run_get_sync_dir_thread() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         std::lock_guard<std::mutex> lock(command_mutex);
+        check_server();
         sync_client();
     }
 }
@@ -561,7 +599,7 @@ void get_file(std::string filename, bool current_path) {
 
     // O Inotify deve ignorar esse evento, porque estamos
     // baixando um arquivo do servidor.
-    client_is_synchronizing = true;
+    downloading_file = true;
 
     Command command = Download;
     write_socket(ssl, (const void *) &command, sizeof(command));
@@ -573,7 +611,7 @@ void get_file(std::string filename, bool current_path) {
         std::cerr << "Servidor informou que arquivo não existe\n";
 
         // Desbloqueia o inotify
-        client_is_synchronizing = false;
+        downloading_file = false;
         return;
     }
 
@@ -594,7 +632,7 @@ void get_file(std::string filename, bool current_path) {
         send_bool(ssl, false);
 
         // Desbloqueia o inotify
-        client_is_synchronizing = false;
+        downloading_file = false;
         return;
     }
     send_bool(ssl, true);
@@ -611,7 +649,7 @@ void get_file(std::string filename, bool current_path) {
     std::cout << "Arquivo " << filename << " recebido com sucesso\n";
 
     // Desbloqueia o inotify
-    client_is_synchronizing = false;
+    downloading_file = false;
 }
 
 
@@ -858,4 +896,58 @@ void sync_client() {
         //std::cout << "Enviando " << filename << " para o servidor\n";
         send_file(filename);
     }
+}
+
+
+/*
+ * ----------------------------------------------------------------------------
+ * check_server
+ * ----------------------------------------------------------------------------
+ * Função que será executada por uma thread. Essa função serve para tentar
+ * determinar se o servidor continua ativo.
+ *
+ * Ela tenta escrever no socket do servidor, caso um problema ocorra,
+ * o SIGPIPE será capturado pela "sigpipe_handler" e um novo servidor
+ * será obtido.
+ * ----------------------------------------------------------------------------
+ */
+void check_server() {
+    const Command command = IsAlive;
+
+    if (socket_ok) {
+        // Testa se consegue escrever no socket.
+        if (write_socket(ssl, (const void *) &command, sizeof(command))) {
+            //std::cout << "Servidor respondeu ok!\n";
+            return;
+        }
+    }
+
+    //std::cout << "Servidor caiu, tentando conectar com outro servidor\n";
+
+    // Caso não seja possível escrever, podemos afirmar que o servidor está fora do ar.
+    if (connect_servers(user_id, &socket_fd, &ssl) == ConnectionResult::Error) {
+        std::cerr << "Não há nenhum servidor disponível\nEncerrando\n";
+        std::exit(1);
+    }
+
+    // TODO: Depois que a eleição estiver implementada, o cliente deverá
+    // tentar se conectar mais de uma vez, aguardando uns instantes entre
+    // as tentativas. Isso pode ser necessário para dar tempo para as
+    // réplicas escolherem o novo servidor principal.
+
+    socket_ok = true;
+}
+
+
+/*
+ * ----------------------------------------------------------------------------
+ * sigpipe_handler
+ * ----------------------------------------------------------------------------
+ * Captura problemas no socket do servidor.
+ * ----------------------------------------------------------------------------
+ */
+void sigpipe_handler() {
+    socket_ok = false;
+    std::cerr << "SIGPIPE caught\n";
+    close(socket_fd);
 }

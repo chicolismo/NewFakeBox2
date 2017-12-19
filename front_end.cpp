@@ -12,7 +12,6 @@ std::string Server::to_string() const {
     return stream.str();
 }
 
-
 std::vector<Server> read_servers() {
     std::vector<Server> servers;
 
@@ -72,15 +71,15 @@ ConnectionResult connect_servers(const std::string &user_id, int *socket_fd, SSL
 
         if (result == ConnectionResult::Error) {
             SSL_CTX_free(ctx);
-            std::cerr << "Erro ao se conectar com um servidor\n";
+            //std::cerr << "Erro ao se conectar com um servidor\n";
         }
         else if (result == ConnectionResult::SSLError) {
             SSL_CTX_free(ctx);
-            std::cerr << "Erro ao se conectar com um servidor via SSL\n";
+            //std::cerr << "Erro ao se conectar com um servidor via SSL\n";
         }
         else if (result == ConnectionResult::CantAccept) {
             // Tentou se conectar com um servidor backup. Não pode concluir a conexão.
-            std::cerr << "Servidor é um backup e não pode concluir a conexão\n";
+            //std::cerr << "Servidor é um backup e não pode concluir a conexão\n";
         }
         else {
             *socket_fd = server.socket_fd;
@@ -115,7 +114,7 @@ ConnectionResult connect_server(Server &server, const std::string &user_id, SSL_
     server_address.sin_port = htons(server.port);
     server_address.sin_addr = *(in_addr *) host_server->h_addr_list[0];
 
-    std::cout << "Tentando se conectar com o servidor " << server.to_string() << " -> user_id(" << user_id << ")\n";
+    // std::cout << "Tentando se conectar com o servidor " << server.to_string() << " -> user_id(" << user_id << ")\n";
     if (connect(server.socket_fd, (sockaddr *) &server_address, sizeof(server_address)) < 0) {
         std::cerr << "Erro ao conectar com o servidor " << server.to_string() << "\n";
         return ConnectionResult::Error;

@@ -115,7 +115,7 @@ bool write_socket(int socket_fd, const void *buffer, size_t count) {
 
     ssize_t bytes_written = 0;
     while (bytes_written < count) {
-        ssize_t bytes = send(socket_fd, ptr, count - bytes_written, 0);
+        ssize_t bytes = send(socket_fd, ptr, count - bytes_written, MSG_NOSIGNAL);
         if (bytes < 0) {
             return false;
         }
