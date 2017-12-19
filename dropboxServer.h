@@ -3,6 +3,17 @@
 #include <string>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <vector>
+#include "dropboxUtil.h"
+
+struct Replica {
+    std::string hostname;
+    uint16_t port;
+    SSL *ssl;
+    int socket_fd;
+    bool active;
+    bool master;
+};
 
 
 void initialize_clients();
@@ -19,5 +30,10 @@ void run_user_interface(std::string user_id, SSL *client_ssl, int client_socket_
 void send_file_infos(std::string user_id, SSL *client_ssl);
 void lock_user(std::string user_id);
 void unlock_user(std::string user_id);
+void run_connect_to_other_servers_thread();
+void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd);
+ConnectionResult connect_server(Replica &replica, SSL_CTX *context);
+
+std::vector<Replica> read_replicas();
 
 #endif

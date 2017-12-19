@@ -13,7 +13,10 @@
 #include <vector>
 #include <openssl/ossl_typ.h>
 
-enum ConnectionType { Normal, Sync };
+enum ConnectionType { Normal, Sync, ServerConnection };
+
+// Possíveis resultados da tentativa de conexão
+enum ConnectionResult { Success, Error, SSLError, CantAccept };
 
 enum Command { Upload, Download, Delete, ListServer, Exit, IsAlive };
 

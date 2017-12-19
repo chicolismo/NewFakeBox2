@@ -11,15 +11,21 @@
 #include "dropboxUtil.h"
 #include "dropboxClient.h"
 #include <boost/filesystem.hpp>
+#include <chrono>
+#include <fstream>
+#include <netdb.h>
 
 namespace fs = boost::filesystem;
 
 // Globais
+std::string server_ip;
 fs::path server_dir;
-
 uint16_t port_number;
 sockaddr_in address{};
 ClientDict clients;
+
+std::vector<Replica> replicas;
+
 
 std::mutex connection_mutex;
 std::mutex user_lock_mutex;
@@ -39,13 +45,24 @@ std::mutex user_lock_mutex;
  * -----------------------------------------------------------------------------
  */
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        std::cerr << "Informe a porta\n";
+    if (argc < 3) {
+        std::cerr << "Informe o ip e a porta\n";
         std::exit(1);
     }
 
+    // Salva o ip do servidor na global
+    server_ip = std::string(argv[1]);
+
     char *end;
-    port_number = static_cast<uint16_t >(std::strtol(argv[1], &end, 10));
+    port_number = static_cast<uint16_t >(std::strtol(argv[2], &end, 10));
+
+    replicas = read_replicas();
+    /*
+    for (auto &replica : replicas) {
+        std::cout << "Hostname: " << replica.hostname << "\n";
+        std::cout << "Port number: " << replica.port << "\n";
+    }
+    */
 
     bzero((void *) &address, sizeof(address));
     address.sin_family = AF_INET;
@@ -92,6 +109,9 @@ int main(int argc, char **argv) {
 
     std::cout << "O servidor está aguardando conexões na porta " << port_number << "\n";
 
+    std::thread connect_to_other_servers;
+    connect_to_other_servers = std::thread(run_connect_to_other_servers_thread);
+
     // Aguardando conexões
     while (true) {
         int new_socket_fd;
@@ -129,6 +149,11 @@ int main(int argc, char **argv) {
         if (type == Normal) {
             std::cout << "Running normal thread\n";
             thread = std::thread(run_normal_thread, new_ssl, new_socket_fd);
+            thread.detach();
+        }
+        else if (type == ServerConnection) {
+            std::cout << "Running server thread\n";
+            thread = std::thread(run_server_thread, new_ssl, new_socket_fd);
             thread.detach();
         }
         else {
@@ -700,5 +725,125 @@ void unlock_user(std::string user_id) {
     auto it = clients.find(user_id);
     if (it != clients.end()) {
         it->second->user_mutex.unlock();
+    }
+}
+
+
+void run_connect_to_other_servers_thread() {
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        for (auto &replica : replicas) {
+            if (replica.active) {
+                continue;
+            } else {
+
+                const SSL_METHOD *method = SSLv23_client_method();
+                SSL_CTX *ctx = SSL_CTX_new(method);
+
+                // O contexto deve ser criado com sucesso!
+                if (ctx == nullptr) {
+                    ERR_print_errors_fp(stderr);
+                    abort();
+                }
+
+                ConnectionResult result = connect_server(replica, ctx);
+                if (result == ConnectionResult::Success) {
+                    replica.active = true;
+                }
+            }
+        }
+    }
+}
+
+
+ConnectionResult connect_server(Replica &replica, SSL_CTX *context) {
+    sockaddr_in server_address{};
+
+    hostent *host_server = gethostbyname(replica.hostname.c_str());
+
+    if (host_server == nullptr) {
+        std::cerr << "Erro ao obter o servidor " << replica.hostname << ":" << replica.port << "\n";
+        return ConnectionResult::Error;
+    }
+
+    replica.socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (replica.socket_fd == -1) {
+        std::cerr << "Erro ao criar o socket do cliente com o servidor " << replica.hostname << ":" << replica.port << "\n";
+        return ConnectionResult::Error;
+    }
+
+    bzero((void *) &server_address, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(replica.port);
+    server_address.sin_addr = *(in_addr *) host_server->h_addr_list[0];
+
+    if (connect(replica.socket_fd, (sockaddr *) &server_address, sizeof(server_address)) < 0) {
+        std::cerr << "Erro ao conectar com o servidor " << replica.hostname << ":" << replica.port << "\n";
+        return ConnectionResult::Error;
+    }
+
+    // Anexando ssl (global) ao socket
+    replica.ssl = SSL_new(context);
+
+    SSL_set_fd(replica.ssl, replica.socket_fd);
+    if (SSL_connect(replica.ssl) == -1) {
+        std::cerr << "Erro ao conectar com ssl\n";
+        ERR_print_errors_fp(stderr);
+        return ConnectionResult::SSLError;
+    }
+
+    // Envia o tipo de conexão ao servidor
+    ConnectionType type = ConnectionType::ServerConnection;
+    ssize_t bytes = write_socket(replica.ssl, (const void *) &type, sizeof(type));
+    if (bytes == -1) {
+        std::cerr << "Erro enviando o tipo de conexão ao servidor";
+        return ConnectionResult::Error;
+    }
+
+    /*
+    send_string(replica.ssl, user_id);
+
+    // Recebe o sinal de ok do servidor
+    bool ok = false;
+    read_socket(server.ssl, (void *) &ok, sizeof(ok));
+
+    if (!ok) {
+        return ConnectionResult::Error;
+    }
+    */
+
+    return ConnectionResult::Success;
+}
+
+std::vector<Replica> read_replicas() {
+    std::vector<Replica> replicas;
+
+    std::ifstream replicas_file;
+    replicas_file.open("servers.txt");
+
+    while (!replicas_file.eof()) {
+        Replica replica;
+        replicas_file >> replica.hostname;
+        replicas_file >> replica.port;
+
+        if (replicas_file.eof()) {
+            break;
+        }
+
+        if (replica.hostname != server_ip || replica.port != port_number) {
+            replica.socket_fd = -1;
+            replica.ssl = nullptr;
+            replica.active = false;
+            replicas.push_back(replica);
+        }
+    }
+    replicas_file.close();
+
+    return std::move(replicas);
+}
+
+void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd) {
+    while (true) {
     }
 }
