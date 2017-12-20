@@ -282,17 +282,19 @@ void run_sync_thread() {
 
         //std::cout << filename << " causou o evento\n";
 
+
+        if (boost::regex_search(filename, invalid_files_pattern)) {
+            // Se o arquivo que causou o evento for temporário, pular o evento.
+            //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
+            continue;
+        }
+
         if (mask & IN_MOVED_FROM ||
             mask & IN_DELETE ||
             mask & IN_MOVED_TO ||
             mask & IN_CREATE ||
             mask & IN_MODIFY) {
 
-            if (boost::regex_search(filename, invalid_files_pattern)) {
-                // Se o arquivo que causou o evento for temporário, pular o evento.
-                //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
-                continue;
-            }
         }
 
         if (mask & IN_MOVED_FROM || mask & IN_DELETE) {

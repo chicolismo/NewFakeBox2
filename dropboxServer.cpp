@@ -501,6 +501,13 @@ void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
     time_t time;
     read_socket(client_ssl, (void *) &time, sizeof(time));
 
+    // Apenas o cliente com o token pode enviar arquivos.
+    FileInfo *fi = get_file_info(user_id, filename);
+    if (fi->holder != client_ssl && fi->holder != nullptr) {
+        send_bool(client_ssl, false);
+        return;
+    }
+
     // Temos que ver se o arquivo existe e se é mais antigo e se devemos recebê-lo.
     bool should_download = !(fs::exists(absolute_path) && (fs::last_write_time(absolute_path) >= time));
     send_bool(client_ssl, should_download);
