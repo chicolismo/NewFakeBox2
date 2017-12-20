@@ -627,10 +627,10 @@ void delete_file(std::string user_id, std::string filename, SSL *client_ssl) {
     }
 
     // Apenas o cliente com o token pode excluir arquivos.
-    FileInfo *fi = get_file_info(user_id, filename);
-    if (fi->holder != client_ssl && fi->holder != nullptr) {
-        return;
-    }
+    //FileInfo *fi = get_file_info(user_id, filename);
+    //if (fi->holder != client_ssl && fi->holder != nullptr) {
+    //    return;
+    //}
 
 
     fs::path user_dir(user_id);

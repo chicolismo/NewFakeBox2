@@ -99,7 +99,7 @@ SSL *ssl;
  * ----------------------------------------------------------------------------
  */
 Inotify inotify(IN_CREATE | IN_MOVED_FROM | IN_MOVED_TO |
-                IN_DELETE | IN_CLOSE_WRITE);
+                IN_DELETE | IN_CLOSE_WRITE | IN_ACCESS);
 
 
 //=============================================================================
@@ -310,17 +310,26 @@ void run_sync_thread() {
             }
         }
 
-        /*
+				/*
         if (mask & IN_ACCESS) {
+            if (boost::regex_search(filename, invalid_files_pattern)) {
+                // Se o arquivo que causou o evento for temporário, pular o evento.
+                //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
+            	continue;
+        	}
             std::lock_guard<std::mutex> lock(command_mutex);
             hold_file(filename);
 
         } else if (mask & IN_CLOSE_WRITE) {
-
+            if (boost::regex_search(filename, invalid_files_pattern)) {
+                // Se o arquivo que causou o evento for temporário, pular o evento.
+                //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
+            	continue;
+        	}
             std::lock_guard<std::mutex> lock(command_mutex);
             release_file(filename);
         }
-        */
+				*/
 
 
         // IN_ACCESS <- Quando um arquivo existente for acessado para escrita,
@@ -969,10 +978,12 @@ void sigpipe_handler() {
 
 void hold_file(std::string filename) {
     Command command = Hold;
-    write_socket(socket_fd, (const void *) &command, sizeof(command));
+    write_socket(ssl, (const void *) &command, sizeof(command));
+    send_string(ssl, filename);
 }
 
 void release_file(std::string filename) {
     Command command = Release;
-    write_socket(socket_fd, (const void *) &command, sizeof(command));
+    write_socket(ssl, (const void *) &command, sizeof(command));
+    send_string(ssl, filename);
 }

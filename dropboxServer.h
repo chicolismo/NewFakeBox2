@@ -55,5 +55,8 @@ std::vector<Replica*> read_replicas();
 
 void server_sigpipe_handler();
 
+void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename);
+
+void release_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename);
 
 #endif
