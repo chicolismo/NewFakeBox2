@@ -5,14 +5,27 @@
 #include <openssl/err.h>
 #include <vector>
 #include "dropboxUtil.h"
+#include <thread>
 
-struct Replica {
+enum ServerCommand { Heartbeat };
+
+class Replica {
+public:
     std::string hostname;
     uint16_t port;
     SSL *ssl;
     int socket_fd;
     bool active;
     bool master;
+    int priority;
+    //std::mutex server_mutex;
+    std::mutex server_mutex;
+    time_t last_heartbeat;
+
+    //Replica();
+    //// Copy constructor.
+    //Replica(const Replica &replica);
+
 };
 
 
@@ -31,9 +44,16 @@ void send_file_infos(std::string user_id, SSL *client_ssl);
 void lock_user(std::string user_id);
 void unlock_user(std::string user_id);
 void run_connect_to_other_servers_thread();
-void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd);
-ConnectionResult connect_server(Replica &replica, SSL_CTX *context);
+void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd, std::string hostname, uint16_t port);
+ConnectionResult connect_server(Replica *replica, SSL_CTX *context);
 
-std::vector<Replica> read_replicas();
+FileInfo *get_file_info(std::string user_id, std::string filename);
+
+void updateReplicas();
+
+std::vector<Replica*> read_replicas();
+
+void server_sigpipe_handler();
+
 
 #endif

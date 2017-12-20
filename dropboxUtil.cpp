@@ -35,6 +35,7 @@ FileInfo::FileInfo() {
     bzero(extension_, MAX_NAME_SIZE);
     last_modified_ = 0;
     bytes_ = 0;
+    holder = nullptr;
 }
 
 void FileInfo::set_filename(const char *filename) {

@@ -18,13 +18,14 @@ enum ConnectionType { Normal, Sync, ServerConnection };
 // Possíveis resultados da tentativa de conexão
 enum ConnectionResult { Success, Error, SSLError, CantAccept };
 
-enum Command { Upload, Download, Delete, ListServer, Exit, IsAlive };
+enum Command { Upload, Download, Delete, ListServer, Exit, IsAlive, Hold, Release };
 
 struct FileInfo {
     char filename_[MAX_NAME_SIZE];
     char extension_[MAX_NAME_SIZE];
     time_t last_modified_;
     size_t bytes_;
+    SSL *holder;
 
     explicit FileInfo();
 

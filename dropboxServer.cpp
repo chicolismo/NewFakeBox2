@@ -14,17 +14,37 @@
 #include <chrono>
 #include <fstream>
 #include <netdb.h>
+#include <csignal>
 
 namespace fs = boost::filesystem;
+
+// Métodos da Replica
+//Replica::Replica() { }
+
+//Replica::Replica(const Replica &replica) {
+    //hostname = replica.hostname;
+    //port = replica.port;
+    //ssl = replica.ssl;
+    //socket_fd = replica.socket_fd;
+    //active = replica.active;
+    //master = replica.master;
+    //priority = replica.priority;
+    //server_mutex = replica.server_mutex;
+    //last_heartbeat = replica.last_heartbeat;
+//}
 
 // Globais
 std::string server_ip;
 fs::path server_dir;
 uint16_t port_number;
+int server_priority;
+bool primary = false;
+//Replica *current_replica = nullptr;
+
 sockaddr_in address{};
 ClientDict clients;
 
-std::vector<Replica> replicas;
+std::vector<Replica*> replicas;
 
 
 std::mutex connection_mutex;
@@ -55,6 +75,9 @@ int main(int argc, char **argv) {
 
     char *end;
     port_number = static_cast<uint16_t >(std::strtol(argv[2], &end, 10));
+
+    // Instalando sigpipe handler
+    signal(SIGPIPE, reinterpret_cast<__sighandler_t>(server_sigpipe_handler));
 
     replicas = read_replicas();
     /*
@@ -153,7 +176,11 @@ int main(int argc, char **argv) {
         }
         else if (type == ServerConnection) {
             std::cout << "Running server thread\n";
-            thread = std::thread(run_server_thread, new_ssl, new_socket_fd);
+            std::string hostname = receive_string(new_ssl);
+            uint16_t port;
+            read_socket(new_ssl, (void *) &port, sizeof(port));
+
+            thread = std::thread(run_server_thread, new_ssl, new_socket_fd, hostname, port);
             thread.detach();
         }
         else {
@@ -188,7 +215,12 @@ void run_normal_thread(SSL *client_ssl, int client_socket_fd) {
 
     // Tenta conectar
     bool is_connected = false;
-    is_connected = connect_client(user_id, client_ssl);
+    if (!primary) {
+        is_connected = false;
+    }
+    else {
+        is_connected = connect_client(user_id, client_ssl);
+    }
     write_socket(client_ssl, (const void *) &is_connected, sizeof(is_connected));
 
     // Se a conexão for bem sucedida, rodar função que espera pelos comandos
@@ -418,6 +450,16 @@ void run_user_interface(const std::string user_id, SSL *client_ssl, int client_s
                 disconnect_client(user_id, client_ssl, client_socket_fd);
                 break;
 
+            case Hold:
+                filename = receive_string(client_ssl);
+                hold_file_for_client(user_id, client_ssl, client_socket_fd, filename);
+                break;
+
+            case Release:
+                filename = receive_string(client_ssl);
+                release_file_for_client(user_id, client_ssl, client_socket_fd, filename);
+                break;
+
             default:
                 std::cout << "Comando não reconhecido\n";
                 break;
@@ -577,6 +619,13 @@ void delete_file(std::string user_id, std::string filename, SSL *client_ssl) {
         return;
     }
 
+    // Apenas o cliente com o token pode excluir arquivos.
+    FileInfo *fi = get_file_info(user_id, filename);
+    if (fi->holder != client_ssl && fi->holder != nullptr) {
+        return;
+    }
+
+
     fs::path user_dir(user_id);
     fs::path file_path(filename);
     fs::path full_path = server_dir / user_dir / file_path;
@@ -729,13 +778,136 @@ void unlock_user(std::string user_id) {
 }
 
 
+ConnectionResult connect_server(Replica *replica, SSL_CTX *context) {
+    sockaddr_in server_address{};
+
+    hostent *host_server = gethostbyname(replica->hostname.c_str());
+
+    if (host_server == nullptr) {
+        //std::cerr << "Erro ao obter o servidor " << replica->hostname << ":" << replica->port << "\n";
+        return ConnectionResult::Error;
+    }
+
+    replica->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (replica->socket_fd == -1) {
+        //std::cerr << "Erro ao criar o socket do cliente com o servidor " << replica->hostname << ":" << replica->port << "\n";
+        return ConnectionResult::Error;
+    }
+
+    bzero((void *) &server_address, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(replica->port);
+    server_address.sin_addr = *(in_addr *) host_server->h_addr_list[0];
+
+    if (connect(replica->socket_fd, (sockaddr *) &server_address, sizeof(server_address)) < 0) {
+        //std::cerr << "Erro ao conectar com o servidor " << replica->hostname << ":" << replica->port << "\n";
+        return ConnectionResult::Error;
+    }
+
+    // Anexando ssl (global) ao socket
+    replica->ssl = SSL_new(context);
+
+    SSL_set_fd(replica->ssl, replica->socket_fd);
+    if (SSL_connect(replica->ssl) == -1) {
+        std::cerr << "Erro ao conectar com ssl\n";
+        ERR_print_errors_fp(stderr);
+        return ConnectionResult::SSLError;
+    }
+
+    // Envia o tipo de conexão ao servidor
+    ConnectionType type = ConnectionType::ServerConnection;
+    ssize_t bytes = write_socket(replica->ssl, (const void *) &type, sizeof(type));
+    if (bytes == -1) {
+        std::cerr << "Erro enviando o tipo de conexão ao servidor";
+        return ConnectionResult::Error;
+    }
+
+    send_string(replica->ssl, server_ip);
+    write_socket(replica->ssl, (const void *) &port_number, sizeof(port_number));
+
+    return ConnectionResult::Success;
+}
+
+std::vector<Replica*> read_replicas() {
+    std::vector<Replica*> replicas;
+
+    std::ifstream replicas_file;
+    replicas_file.open("servers.txt");
+
+    int priority = 0;
+    while (!replicas_file.eof()) {
+        ++priority;
+
+        Replica *replica = new Replica();
+
+        replicas_file >> replica->hostname;
+        replicas_file >> replica->port;
+        replica->priority = priority;
+
+        if (replicas_file.eof()) {
+            break;
+        }
+
+        time_t now; time(&now);
+        if (replica->hostname != server_ip || replica->port != port_number) {
+            replica->socket_fd = -1;
+            replica->ssl = nullptr;
+            replica->active = false;
+            replica->last_heartbeat = now;
+            replicas.push_back(replica);
+        } else {
+            // Estamos lendo as informações do próprio servidor.
+            // Atribui a prioridade global do servidor.
+            server_priority = priority;
+        }
+    }
+    replicas_file.close();
+
+    return std::move(replicas);
+}
+
+
 void run_connect_to_other_servers_thread() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+        std::cout << "Sou master: " << (primary ? "Sim" : "Não") << "\n";
 
+        int actives = 0;
         for (auto &replica : replicas) {
-            if (replica.active) {
-                continue;
+            if (replica->active) {
+                // Temos que testar se a réplica não deu timeout
+                
+                time_t now; time(&now);
+                time_t time_elapsed = now - replica->last_heartbeat;
+                //std::cout << "Time elapsed " << time_elapsed << "\n";
+
+                if (time_elapsed > 4) {
+                    replica->active = false;
+                    continue;
+                }
+
+
+                // Se não deu timeout, devemos enviar nosso heartbeat para ela
+                // Envia o heartbeat para a réplica
+                std::lock_guard<std::mutex> lock(replica->server_mutex);
+
+                // Envia o comando
+                ServerCommand command = Heartbeat;
+                write_socket(replica->ssl, (const void *) &command, sizeof(command));
+
+                // Podemos estar como nullptr dentro da lista de replicas do outro servidor.
+                bool ok = read_bool(replica->ssl);
+
+                if (ok) {
+                    // Envia o timestamp
+                    time_t now; time(&now);
+                    write_socket(replica->ssl, (const void *) &now, sizeof(now));
+                    //std::cout << "Last heartbeat: " << replica->last_heartbeat << "\n";
+                }
+
+
+                ++actives;
+                primary = replica->priority < server_priority;
+
             } else {
 
                 const SSL_METHOD *method = SSLv23_client_method();
@@ -749,101 +921,134 @@ void run_connect_to_other_servers_thread() {
 
                 ConnectionResult result = connect_server(replica, ctx);
                 if (result == ConnectionResult::Success) {
-                    replica.active = true;
+                    replica->active = true;
                 }
             }
         }
+
+        if (actives == 0) {
+            primary = true;
+        }
+
+        // Espera 2 segundos para tentar de novo
+        std::this_thread::sleep_for(std::chrono::seconds(2));
     }
 }
 
 
-ConnectionResult connect_server(Replica &replica, SSL_CTX *context) {
-    sockaddr_in server_address{};
-
-    hostent *host_server = gethostbyname(replica.hostname.c_str());
-
-    if (host_server == nullptr) {
-        std::cerr << "Erro ao obter o servidor " << replica.hostname << ":" << replica.port << "\n";
-        return ConnectionResult::Error;
+Replica *get_replica(const std::string &hostname, const uint16_t &port) {
+    for (auto &replica : replicas) {
+        if (replica->hostname == hostname && replica->port == port) {
+            return replica;
+        }
     }
-
-    replica.socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (replica.socket_fd == -1) {
-        std::cerr << "Erro ao criar o socket do cliente com o servidor " << replica.hostname << ":" << replica.port << "\n";
-        return ConnectionResult::Error;
-    }
-
-    bzero((void *) &server_address, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(replica.port);
-    server_address.sin_addr = *(in_addr *) host_server->h_addr_list[0];
-
-    if (connect(replica.socket_fd, (sockaddr *) &server_address, sizeof(server_address)) < 0) {
-        std::cerr << "Erro ao conectar com o servidor " << replica.hostname << ":" << replica.port << "\n";
-        return ConnectionResult::Error;
-    }
-
-    // Anexando ssl (global) ao socket
-    replica.ssl = SSL_new(context);
-
-    SSL_set_fd(replica.ssl, replica.socket_fd);
-    if (SSL_connect(replica.ssl) == -1) {
-        std::cerr << "Erro ao conectar com ssl\n";
-        ERR_print_errors_fp(stderr);
-        return ConnectionResult::SSLError;
-    }
-
-    // Envia o tipo de conexão ao servidor
-    ConnectionType type = ConnectionType::ServerConnection;
-    ssize_t bytes = write_socket(replica.ssl, (const void *) &type, sizeof(type));
-    if (bytes == -1) {
-        std::cerr << "Erro enviando o tipo de conexão ao servidor";
-        return ConnectionResult::Error;
-    }
-
-    /*
-    send_string(replica.ssl, user_id);
-
-    // Recebe o sinal de ok do servidor
-    bool ok = false;
-    read_socket(server.ssl, (void *) &ok, sizeof(ok));
-
-    if (!ok) {
-        return ConnectionResult::Error;
-    }
-    */
-
-    return ConnectionResult::Success;
+    return nullptr;
 }
 
-std::vector<Replica> read_replicas() {
-    std::vector<Replica> replicas;
+/*
+ * Função que escuta comando dos outros servidores
+ */
+void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd, std::string hostname, uint16_t port) {
+    ServerCommand command;
+    while (true) {
+        if (recv(other_server_socket_fd, (void *) &command, sizeof(command), MSG_PEEK | MSG_DONTWAIT) == 0) {
+            // O servidor não está mais ativo...
+            Replica *replica = get_replica(hostname, port);
+            replica->active = false;
+            return;
+        }
 
-    std::ifstream replicas_file;
-    replicas_file.open("servers.txt");
+        read_socket(other_server_ssl, (void *) &command, sizeof(command));
 
-    while (!replicas_file.eof()) {
-        Replica replica;
-        replicas_file >> replica.hostname;
-        replicas_file >> replica.port;
+        //std::cout << "Recebendo comando da replica\n";
 
-        if (replicas_file.eof()) {
+        Replica *replica = get_replica(hostname, port);
+        if (replica == nullptr) {
+            //std::cout << "replica é nullptr\n";
+            send_bool(other_server_ssl, false);
+            continue;
+        }
+        else {
+            send_bool(other_server_ssl, true);
+        }
+
+        std::lock_guard<std::mutex> lock(replica->server_mutex);
+
+
+        switch (command) {
+
+        case Heartbeat:
+            time_t heartbeat;
+            read_socket(other_server_ssl, (void *) &heartbeat, sizeof(heartbeat));
+
+            // Talvez ainda não nos conectamos com essa réplica que está mandando
+            // mensagens para nós
+            if (replica != nullptr) {
+                replica->last_heartbeat = heartbeat;
+            }
+            break;
+
+        default:
             break;
         }
-
-        if (replica.hostname != server_ip || replica.port != port_number) {
-            replica.socket_fd = -1;
-            replica.ssl = nullptr;
-            replica.active = false;
-            replicas.push_back(replica);
-        }
     }
-    replicas_file.close();
-
-    return std::move(replicas);
 }
 
-void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd) {
-    while (true) {
+void server_sigpipe_handler() {
+    //if (current_replica != nullptr) {
+        //current_replica->active = false;
+        //close(current_replica->socket_fd);
+    //}
+}
+
+
+//void updateReplicas() {
+    //for (auto &replica : replicas) {
+        //std::vector<FileInfo> server_files = get_server_files();
+
+    //}
+//}
+
+FileInfo *get_file_info(std::string user_id, std::string filename) {
+    auto it = clients.find(user_id);
+
+    // Verifica se o cliente existe no dicionário
+    if (it == clients.end()) {
+        return nullptr;
     }
+
+    Client *client = it->second;
+
+    // Procura o FileInfo a ser atualizado
+    FileInfo *file = nullptr;
+    for (FileInfo &file_info : client->files) {
+        if (file_info.filename() == filename) {
+            file = &file_info;
+            break;
+        }
+    }
+    return file;
+}
+
+
+void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename) {
+    lock_user(user_id);
+
+    FileInfo *fi = get_file_info(std::move(user_id), std::move(filename));
+    if (fi->holder == nullptr) {
+        fi->holder = client_ssl;
+    }
+
+    unlock_user(user_id);
+}
+
+void release_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename) {
+    lock_user(user_id);
+
+    FileInfo *fi = get_file_info(std::move(user_id), std::move(filename));
+    if (fi->holder == client_ssl) {
+        fi->holder = nullptr;
+    }
+
+    unlock_user(user_id);
 }

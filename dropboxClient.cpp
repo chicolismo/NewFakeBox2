@@ -298,7 +298,6 @@ void run_sync_thread() {
         if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
             std::lock_guard<std::mutex> lock(command_mutex);
 
-            check_server();
             send_delete_command(filename);
         }
         else if (mask & IN_MOVED_TO || mask & IN_CREATE || mask & IN_MODIFY) {
@@ -307,10 +306,20 @@ void run_sync_thread() {
                 std::lock_guard<std::mutex> lock(command_mutex);
                 // O caminho absoluto é necessário na hora de enviar arquivos.
 
-                check_server();
                 send_file(event.path.string());
             }
         }
+
+        if (mask & IN_ACCESS) {
+            std::lock_guard<std::mutex> lock(command_mutex);
+            hold_file(filename);
+
+        } else if (mask & IN_CLOSE_WRITE) {
+
+            std::lock_guard<std::mutex> lock(command_mutex);
+            release_file(filename);
+        }
+
 
         // IN_ACCESS <- Quando um arquivo existente for acessado para escrita,
         // teremos que obter o lock.  O lock só poderá ser destravado quando
@@ -922,6 +931,10 @@ void check_server() {
         }
     }
 
+    // Aguardaremos alguns instantes;
+    //std::lock_guard<std::mutex> lock(command_mutex);
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+
     //std::cout << "Servidor caiu, tentando conectar com outro servidor\n";
 
     // Caso não seja possível escrever, podemos afirmar que o servidor está fora do ar.
@@ -948,6 +961,16 @@ void check_server() {
  */
 void sigpipe_handler() {
     socket_ok = false;
-    std::cerr << "SIGPIPE caught\n";
-    close(socket_fd);
+    //std::cerr << "SIGPIPE caught\n";
+    //close(socket_fd);
+}
+
+void hold_file(std::string filename) {
+    Command command = Hold;
+    write_socket(socket_fd, (const void *) &command, sizeof(command));
+}
+
+void release_file(std::string filename) {
+    Command command = Release;
+    write_socket(socket_fd, (const void *) &command, sizeof(command));
 }
