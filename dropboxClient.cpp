@@ -941,15 +941,20 @@ void check_server() {
             return;
         }
     }
-
+counter:
+		int count = 0;
     // Aguardaremos alguns instantes;
     //std::lock_guard<std::mutex> lock(command_mutex);
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::this_thread::sleep_for(std::chrono::seconds(5));
 
     //std::cout << "Servidor caiu, tentando conectar com outro servidor\n";
 
     // Caso não seja possível escrever, podemos afirmar que o servidor está fora do ar.
     if (connect_servers(user_id, &socket_fd, &ssl) == ConnectionResult::Error) {
+				if (count < 3) {
+					++count;
+					goto counter;
+				}
         std::cerr << "Não há nenhum servidor disponível\nEncerrando\n";
         std::exit(1);
     }
