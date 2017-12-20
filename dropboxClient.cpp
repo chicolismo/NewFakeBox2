@@ -972,6 +972,7 @@ void check_server() {
  */
 void sigpipe_handler() {
     socket_ok = false;
+		command_mutex.unlock();
     //std::cerr << "SIGPIPE caught\n";
     //close(socket_fd);
 }
