@@ -271,6 +271,11 @@ void run_sync_thread() {
     while (true) {
         FileSystemEvent event = inotify.getNextEvent();
 
+        // Ignora diretórios e afins.
+        if (!fs::is_regular_file(event.path)) {
+            continue;
+        }
+
         // Se estivermos baixando um arquivo do servidor, todos os eventos devem ser ignorados,
         // porque não queremos enviar o mesmo arquivo de voltar ao servidor.
         if (downloading_file) {
@@ -287,7 +292,6 @@ void run_sync_thread() {
         // O nome do arquivo que causou o evento, sem o caminho absoluto
         std::string filename = event.path.filename().string();
 
-        /*
         if (mask & IN_MOVED_FROM) {
             std::cout << "IN_MOVED_FROM\n";
         }
@@ -311,6 +315,7 @@ void run_sync_thread() {
         }
 
         std::cout << filename << " causou o evento\n";
+        /*
         */
 
         if (mask & IN_MOVED_FROM ||
