@@ -16,22 +16,14 @@
 #include <netdb.h>
 #include <csignal>
 
+/*
+ *
+ * TODO: Quando o cliente excluir um arquivo, a sua estrutura correspondente
+ * deve indicar que o arquivo está deletado.
+ *
+ */
+
 namespace fs = boost::filesystem;
-
-// Métodos da Replica
-//Replica::Replica() { }
-
-//Replica::Replica(const Replica &replica) {
-    //hostname = replica.hostname;
-    //port = replica.port;
-    //ssl = replica.ssl;
-    //socket_fd = replica.socket_fd;
-    //active = replica.active;
-    //master = replica.master;
-    //priority = replica.priority;
-    //server_mutex = replica.server_mutex;
-    //last_heartbeat = replica.last_heartbeat;
-//}
 
 // Globais
 std::string server_ip;
@@ -39,7 +31,6 @@ fs::path server_dir;
 uint16_t port_number;
 int server_priority;
 bool primary = false;
-//Replica *current_replica = nullptr;
 
 sockaddr_in address{};
 ClientDict clients;
@@ -480,11 +471,7 @@ void run_user_interface(const std::string user_id, SSL *client_ssl, int client_s
  * Uma vez que o nome do arquivo foi fornecido, essa função recebe o tamanho do
  * arquivo em bytes e a data de modificação.  Caso o arquivo não exista no
  * servidor ou seja mais recente, uma notificação para enviar o arquivo será
- * enviada ao cliente.  Depois a função tentará abrir o arquivo.  O sucesso ou
- * não da abertura do arquivo é informado ao cliente.  Em caso de sucesso na
- * hora de abrir o arquivo ele será recebido do cliente.
- * -----------------------------------------------------------------------------
- */
+ * enviada ao cliente.  Depois a função tentará abrir o arquivo.  O sucesso ou * não da abertura do arquivo é informado ao cliente.  Em caso de sucesso na * hora de abrir o arquivo ele será recebido do cliente.  * ----------------------------------------------------------------------------- */
 void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
 
     fs::path absolute_path = server_dir / fs::path(user_id) / fs::path(filename);
@@ -540,8 +527,84 @@ void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
     // Atualiza lista de arquivos do usuário
     update_files(user_id, filename, file_size, time);
 
+    if (primary) {
+        for (auto &replica : replicas) {
+            if (replica->active) {
+                // Trava o mutex da replica. Apenas um comando pode ser enviado de
+                // cada vez para a mesma réplica.
+                std::lock_guard<std::mutex> lock(replica->server_mutex);
+
+                send_file_server(user_id, filename, replica->ssl);
+            }
+        }
+    }
 }
 // }}}
+
+
+void send_file_server(std::string user_id, std::string filename, SSL *replica_ssl) {
+
+    // Determina o caminho absoluto do arquivo no servidor
+    fs::path absolute_path = server_dir / fs::path(user_id) / fs::path(filename);
+
+    FILE *file;
+    bool file_ok;
+
+    // Se o arquivo existir, tenta abri-lo
+    if ((file_ok = fs::exists(absolute_path)) == true) {
+        file = fopen(absolute_path.c_str(), "rb");
+
+        if (file == nullptr) {
+            file_ok = false;
+        }
+    }
+
+    if (file_ok) {
+        std::cout << "Arquivo ok\n";
+    }
+    else {
+        std::cout << "Arquivo não ok\n";
+        return;
+    }
+
+    //-------------------------------------------------------------------------
+    // Envia o comando e os dados do arquivo para a réplica
+    //-------------------------------------------------------------------------
+    ServerCommand command = ServerCommand::ServerUpload;
+
+    // Envia o comando
+    write_socket(replica_ssl, (const void *) &command, sizeof(command));
+    
+    // Envia o user_id
+    send_string(replica_ssl, user_id);
+
+    // Envia o nome do arquivo
+    send_string(replica_ssl, filename);
+
+    // Envia o tamanho do arquivo
+    size_t file_size = fs::file_size(absolute_path);
+    write_socket(replica_ssl, (const void *) &file_size, sizeof(file_size));
+
+    // Recebe a confirmação que o cliente conseguiu criar o arquivo localmente,
+    // e está esperando os bytes.
+    bool ok = read_bool(replica_ssl);
+
+    if (ok) {
+        // Envia os bytes do arquivo ao cliente
+        send_file(replica_ssl, file, file_size);
+    }
+    fclose(file);
+
+    // Envia ao cliente a data de modificação do arquivo, para que ele possa
+    // modificar sua cópia local com a data correta.
+    //
+    time_t timestamp = fs::last_write_time(absolute_path);
+    std::cout << "Last write time a ser enviado: " << timestamp << "\n";
+    // Envia a data de modificação
+    write_socket(replica_ssl, (const void *) &timestamp, sizeof(timestamp));
+    std::cout << "Data de criação enviada\n";
+
+}
 
 
 /*
@@ -660,6 +723,11 @@ void delete_file(std::string user_id, std::string filename, SSL *client_ssl) {
         if (primary) {
             for (auto &replica : replicas) {
                 if (replica->active) {
+                    // Trava o mutex da replica. Apenas um comando pode ser enviado de
+                    // cada vez para a mesma réplica.
+                   
+                    std::lock_guard<std::mutex> lock(replica->server_mutex);
+
                     ServerCommand command = ServerCommand::ServerDelete;
 
                     // Envia o comando para excluir
@@ -1024,6 +1092,13 @@ void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd, std::s
             delete_file_server(user_id, filename, other_server_ssl);
             break;
 
+        case ServerUpload:
+            std::cout << "recebendo comando de upload\n";
+            user_id = receive_string(other_server_ssl);
+            filename = receive_string(other_server_ssl);
+            receive_file_server(user_id, filename, other_server_ssl);
+            break;
+
         default:
             break;
         }
@@ -1065,12 +1140,48 @@ void delete_file_server(const std::string &user_id, const std::string &filename,
 }
 
 
+void receive_file_server(const std::string &user_id, const std::string &filename, SSL *other_server_ssl) {
+    fs::path absolute_path = server_dir / fs::path(user_id) / fs::path(filename);
+
+    //std::cout << "O caminho absoluto até o arquivo no servidor é " << absolute_path.string() << "\n";
+
+    // Vamos ler o tamanho do arquivo!
+    size_t file_size;
+    read_socket(other_server_ssl, (void *) &file_size, sizeof(file_size));
+
+    std::cout << "Tamanho do arquivo recebido: " << file_size << " bytes\n";
+
+    // Vamos tentar abrir o arquivo
+    FILE *file = fopen(absolute_path.c_str(), "wb");
+    if (file == nullptr) {
+        std::cerr << "Arquivo " << absolute_path << " não pode ser aberto\n";
+        send_bool(other_server_ssl, false);
+        return;
+    }
+
+    send_bool(other_server_ssl, true);
+    // Vamos receber os bytes do arquivo.
+    std::cout << "Preparando para receber os bytes do arquivo\n";
+
+    // TODO: Receber o arquivo
+    read_file(other_server_ssl, file, file_size);
+    fclose(file);
+
+    std::cout << "Arquivo " << absolute_path.string() << " recebido\n";
+
+    time_t time;
+    read_socket(other_server_ssl, (void *) &time, sizeof(time));
+
+    // escreve a data de modificação do arquivo
+    fs::last_write_time(absolute_path, time);
+
+    // Atualiza lista de arquivos do usuário
+    update_files(user_id, filename, file_size, time);
+}
+
 
 void server_sigpipe_handler() {
-    //if (current_replica != nullptr) {
-        //current_replica->active = false;
-        //close(current_replica->socket_fd);
-    //}
+    // Não faz nada por enquanto...
 }
 
 

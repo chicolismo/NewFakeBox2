@@ -98,9 +98,15 @@ SSL *ssl;
  * Objeto que vai ficar escutando mudanças no diretório do cliente.
  * ----------------------------------------------------------------------------
  */
-Inotify inotify(IN_CREATE | IN_MOVED_FROM | IN_MOVED_TO |
-                IN_DELETE | IN_CLOSE_WRITE | IN_ACCESS);
-
+Inotify inotify(
+        IN_CREATE |
+        IN_MOVED_FROM |
+        IN_MOVED_TO |
+        IN_DELETE |
+        IN_CLOSE_WRITE |
+        IN_ACCESS |
+        IN_MODIFY
+        );
 
 //=============================================================================
 // Funções
@@ -261,6 +267,7 @@ void run_sync_thread() {
     // nem arquivos que comecem com "~"
     boost::regex invalid_files_pattern{"^(\\.goutputstream|~)"};
 
+
     while (true) {
         FileSystemEvent event = inotify.getNextEvent();
 
@@ -280,17 +287,43 @@ void run_sync_thread() {
         // O nome do arquivo que causou o evento, sem o caminho absoluto
         std::string filename = event.path.filename().string();
 
-        //std::cout << filename << " causou o evento\n";
+        /*
+        if (mask & IN_MOVED_FROM) {
+            std::cout << "IN_MOVED_FROM\n";
+        }
+        if (mask & IN_DELETE) {
+            std::cout << "IN_DELETE\n";
+        }
+        if (mask & IN_MOVED_TO) {
+            std::cout << "IN_MOVED_TO\n";
+        }
+        if (mask & IN_CREATE) {
+            std::cout << "IN_CREATE\n";
+        }
+        if (mask & IN_ACCESS) {
+            std::cout << "IN_ACCESS\n";
+        }
+        if (mask & IN_CLOSE_WRITE) {
+            std::cout << "IN_CLOSE_WRITE\n";
+        }
+        if (mask & IN_MODIFY) {
+            std::cout << "IN_MODIFY\n";
+        }
+
+        std::cout << filename << " causou o evento\n";
+        */
 
         if (mask & IN_MOVED_FROM ||
             mask & IN_DELETE ||
             mask & IN_MOVED_TO ||
             mask & IN_CREATE ||
+            mask & IN_ACCESS ||
+            mask & IN_CLOSE_WRITE ||
             mask & IN_MODIFY) {
 						
 			if (boost::regex_search(filename, invalid_files_pattern)) {
                 // Se o arquivo que causou o evento for temporário, pular o evento.
-                //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
+                std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
             	continue;
         	}
         }
@@ -310,26 +343,19 @@ void run_sync_thread() {
             }
         }
 
-				/*
+        /*
         if (mask & IN_ACCESS) {
-            if (boost::regex_search(filename, invalid_files_pattern)) {
-                // Se o arquivo que causou o evento for temporário, pular o evento.
-                //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
-            	continue;
-        	}
-            std::lock_guard<std::mutex> lock(command_mutex);
-            hold_file(filename);
-
+            if (fs::is_regular_file(event.path)) {
+                std::lock_guard<std::mutex> lock(command_mutex);
+                hold_file(filename);
+            }
         } else if (mask & IN_CLOSE_WRITE) {
-            if (boost::regex_search(filename, invalid_files_pattern)) {
-                // Se o arquivo que causou o evento for temporário, pular o evento.
-                //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
-            	continue;
-        	}
-            std::lock_guard<std::mutex> lock(command_mutex);
-            release_file(filename);
+            if (fs::is_regular_file(event.path)) {
+                std::lock_guard<std::mutex> lock(command_mutex);
+                release_file(filename);
+            }
         }
-				*/
+        */
 
 
         // IN_ACCESS <- Quando um arquivo existente for acessado para escrita,
@@ -941,8 +967,10 @@ void check_server() {
             return;
         }
     }
+
 counter:
-		int count = 0;
+    int count = 0;
+
     // Aguardaremos alguns instantes;
     //std::lock_guard<std::mutex> lock(command_mutex);
     std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -950,11 +978,12 @@ counter:
     //std::cout << "Servidor caiu, tentando conectar com outro servidor\n";
 
     // Caso não seja possível escrever, podemos afirmar que o servidor está fora do ar.
+
     if (connect_servers(user_id, &socket_fd, &ssl) == ConnectionResult::Error) {
-				if (count < 3) {
-					++count;
-					goto counter;
-				}
+        if (count < 3) {
+            ++count;
+            goto counter;
+        }
         std::cerr << "Não há nenhum servidor disponível\nEncerrando\n";
         std::exit(1);
     }
@@ -977,7 +1006,7 @@ counter:
  */
 void sigpipe_handler() {
     socket_ok = false;
-		command_mutex.unlock();
+    command_mutex.unlock();
     //std::cerr << "SIGPIPE caught\n";
     //close(socket_fd);
 }
