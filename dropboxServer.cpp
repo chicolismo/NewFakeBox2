@@ -21,6 +21,10 @@
  * TODO: Quando o cliente excluir um arquivo, a sua estrutura correspondente
  * deve indicar que o arquivo está deletado.
  *
+ * TODO: Para determinar se precisamos do arquivo, também devemos comparar seu
+ * tamanho, já que o inotify pode enviar o arquivo recém colado, antes de
+ * terminarmos de copiar seu conteúdo para o diretório de destino.
+ *
  */
 
 namespace fs = boost::filesystem;
