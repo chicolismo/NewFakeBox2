@@ -346,21 +346,23 @@ void run_sync_thread() {
 
                 send_file(event.path.string());
             }
-        }
+        } else {
 
-        /*
-        if (mask & IN_ACCESS) {
-            if (fs::is_regular_file(event.path)) {
-                std::lock_guard<std::mutex> lock(command_mutex);
-                hold_file(filename);
+            /*
+            if (mask & IN_ACCESS) {
+                if (fs::is_regular_file(event.path)) {
+                    std::lock_guard<std::mutex> lock(command_mutex);
+                    hold_file(filename);
+                }
+            } else if (mask & IN_CLOSE_WRITE) {
+                if (fs::is_regular_file(event.path)) {
+                    std::lock_guard<std::mutex> lock(command_mutex);
+                    release_file(filename);
+                }
             }
-        } else if (mask & IN_CLOSE_WRITE) {
-            if (fs::is_regular_file(event.path)) {
-                std::lock_guard<std::mutex> lock(command_mutex);
-                release_file(filename);
-            }
+            */
+
         }
-        */
 
 
         // IN_ACCESS <- Quando um arquivo existente for acessado para escrita,
