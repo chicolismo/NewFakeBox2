@@ -7,7 +7,7 @@
 #include "dropboxUtil.h"
 #include <thread>
 
-enum ServerCommand { Heartbeat };
+enum ServerCommand { Heartbeat, ServerDelete };
 
 class Replica {
 public:
@@ -58,5 +58,7 @@ void server_sigpipe_handler();
 void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename);
 
 void release_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename);
+
+void delete_file_server(const std::string &user_id, const std::string &filename, SSL *other_server_ssl);
 
 #endif

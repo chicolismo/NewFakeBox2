@@ -656,6 +656,24 @@ void delete_file(std::string user_id, std::string filename, SSL *client_ssl) {
             it->second->files.erase(it->second->files.begin() + counter);
         }
 
+        // Envia o comando de excluir o arquivo para as réplicas.
+        if (primary) {
+            for (auto &replica : replicas) {
+                if (replica->active) {
+                    ServerCommand command = ServerCommand::ServerDelete;
+
+                    // Envia o comando para excluir
+                    write_socket(replica->ssl, (const void *) &command, sizeof(command));
+
+                    // Envia o user_id
+                    send_string(replica->ssl, user_id);
+
+                    // Envia o nome do arquivo
+                    send_string(replica->ssl, filename);
+                }
+            }
+        }
+
     }
     else {
         std::cout << "Arquivo " << full_path << " não existe\n";
@@ -957,7 +975,11 @@ Replica *get_replica(const std::string &hostname, const uint16_t &port) {
  */
 void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd, std::string hostname, uint16_t port) {
     ServerCommand command;
+    std::string user_id;
+    std::string filename;
+
     while (true) {
+
         if (recv(other_server_socket_fd, (void *) &command, sizeof(command), MSG_PEEK | MSG_DONTWAIT) == 0) {
             // O servidor não está mais ativo...
             Replica *replica = get_replica(hostname, port);
@@ -995,11 +1017,54 @@ void run_server_thread(SSL *other_server_ssl, int other_server_socket_fd, std::s
             }
             break;
 
+        case ServerDelete:
+            std::cout << "recebendo comando de delete\n";
+            user_id = receive_string(other_server_ssl);
+            filename = receive_string(other_server_ssl);
+            delete_file_server(user_id, filename, other_server_ssl);
+            break;
+
         default:
             break;
         }
     }
 }
+
+void delete_file_server(const std::string &user_id, const std::string &filename, SSL *other_server_ssl) {
+    auto it = clients.find(user_id);
+    if (it == clients.end()) {
+        return;
+    }
+
+    fs::path user_dir(user_id);
+    fs::path file_path(filename);
+    fs::path full_path = server_dir / user_dir / file_path;
+
+    bool deleted = fs::remove(full_path);
+    if (deleted) {
+        std::cout << "Arquivo " << full_path << " removido do servidor\n";
+
+        bool found = false;
+        int counter = 0;
+
+        for (FileInfo &info : it->second->files) {
+            if (info.filename() == filename) {
+                //std::cout << filename << " Encontrado nos filenames\n";
+                found = true;
+                break;
+            }
+            ++counter;
+        }
+        if (found) {
+            it->second->files.erase(it->second->files.begin() + counter);
+        }
+    }
+    else {
+        std::cout << "Arquivo " << full_path << " não existe\n";
+    }
+}
+
+
 
 void server_sigpipe_handler() {
     //if (current_replica != nullptr) {
