@@ -98,9 +98,22 @@ SSL *ssl;
  * Objeto que vai ficar escutando mudanças no diretório do cliente.
  * ----------------------------------------------------------------------------
  */
-Inotify inotify(IN_CREATE | IN_MOVED_FROM | IN_MOVED_TO |
-                IN_DELETE | IN_CLOSE_WRITE);
 
+/*
+Inotify inotify(
+        IN_CREATE |
+        IN_MOVED_FROM |
+        IN_MOVED_TO |
+        IN_DELETE |
+        IN_CLOSE_WRITE |
+        IN_ACCESS |
+        IN_MODIFY
+        );
+*/
+
+
+Inotify inotify(IN_MODIFY | IN_CREATE | IN_MOVED_FROM | IN_MOVED_TO |
+IN_DELETE | IN_CLOSE_WRITE | IN_ACCESS | IN_CLOSE_NOWRITE | IN_OPEN);
 
 //=============================================================================
 // Funções
@@ -261,64 +274,117 @@ void run_sync_thread() {
     // nem arquivos que comecem com "~"
     boost::regex invalid_files_pattern{"^(\\.goutputstream|~)"};
 
+
     while (true) {
         FileSystemEvent event = inotify.getNextEvent();
-
-        // Se estivermos baixando um arquivo do servidor, todos os eventos devem ser ignorados,
-        // porque não queremos enviar o mesmo arquivo de voltar ao servidor.
-        if (downloading_file) {
-            continue;
-        }
-
-        // Não queremos enviar comandos caso o socket não esteja funcionando.
-        if (!socket_ok) {
-            continue;
-        }
-
+        
+       
+        /*
+        std::cout << "modify " << IN_MODIFY << "\n";
+        std::cout << "create " << IN_CREATE << "\n";
+        std::cout << "moved_from " << IN_MOVED_FROM << "\n";
+        std::cout << "moved_to " << IN_MOVED_TO << "\n";
+        std::cout << "delete " << IN_CLOSE_DELETE << "\n";
+        std::cout << "close_write " << IN_CLOSE_WRITE << "\n";
+        std::cout << "access " << IN_ACCESS << "\n";
+        std::cout << "close_nowrite " << IN_CLOSE_NOWRITE << "\n";
+        std::cout << "open " << IN_OPEN << "\n";
+        std::cout << "EVENTO: " << event.mask << "\n";
+        */
+               
         auto mask = event.mask;
 
         // O nome do arquivo que causou o evento, sem o caminho absoluto
         std::string filename = event.path.filename().string();
 
-        //std::cout << filename << " causou o evento\n";
+        std::cout << filename << " causou o evento\n";
+
+        if (mask & IN_MOVED_FROM) {
+            std::cout << "IN_MOVED_FROM\n";
+        }
+        if (mask & IN_DELETE) {
+            std::cout << "IN_DELETE\n";
+        }
+        if (mask & IN_MOVED_TO) {
+            std::cout << "IN_MOVED_TO\n";
+        }
+        if (mask & IN_CREATE) {
+            std::cout << "IN_CREATE\n";
+        }
+        if (mask & IN_ACCESS) {
+            std::cout << "IN_ACCESS\n";
+        }
+        if (mask & IN_CLOSE_WRITE) {
+            std::cout << "IN_CLOSE_WRITE\n";
+        }
+        if (mask & IN_MODIFY) {
+            std::cout << "IN_MODIFY\n";
+        }
+        /*
+        */
+
+         // Ignora diretórios.
+        if (fs::is_directory(event.path)) {
+            std::cout << "É um diretório -- CONTINUE\n";
+            continue;
+        }
+
+        // Não queremos enviar comandos caso o socket não esteja funcionando.
+        if (!socket_ok) {
+            std::cout << "Socket não ok -- CONTINUE\n";
+            continue;
+        }
 
         if (mask & IN_MOVED_FROM ||
             mask & IN_DELETE ||
             mask & IN_MOVED_TO ||
             mask & IN_CREATE ||
+            mask & IN_ACCESS ||
+            mask & IN_CLOSE_WRITE ||
             mask & IN_MODIFY) {
-
-            if (boost::regex_search(filename, invalid_files_pattern)) {
+						
+			if (boost::regex_search(filename, invalid_files_pattern)) {
                 // Se o arquivo que causou o evento for temporário, pular o evento.
-                //std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
-                continue;
-            }
+                std::cout << "Arquivo " << event.path.string() << " não será enviado ao servidor\n";
+            	continue;
+        	}
         }
 
         if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
+            std::cout << "Deletando " << filename << "\n";
             std::lock_guard<std::mutex> lock(command_mutex);
 
             send_delete_command(filename);
         }
         else if (mask & IN_MOVED_TO || mask & IN_CREATE || mask & IN_MODIFY) {
+            // Se estivermos baixando um arquivo do servidor, todos os eventos devem ser ignorados,
+            // porque não queremos enviar o mesmo arquivo de voltar ao servidor.
             // O evento deve ser causado por um arquivo comum, e não um link simbólico ou diretório.
-            if (fs::is_regular_file(event.path)) {
+            if (fs::is_regular_file(event.path) && !downloading_file) {
                 std::lock_guard<std::mutex> lock(command_mutex);
                 // O caminho absoluto é necessário na hora de enviar arquivos.
 
                 send_file(event.path.string());
             }
+        } else {
+
+            /*
+            if (mask & IN_ACCESS) {
+                if (fs::is_regular_file(event.path)) {
+                    std::lock_guard<std::mutex> lock(command_mutex);
+                    hold_file(filename);
+                }
+            } else if (mask & IN_CLOSE_WRITE) {
+                if (fs::is_regular_file(event.path)) {
+                    std::lock_guard<std::mutex> lock(command_mutex);
+                    release_file(filename);
+                }
+            }
+            */
+
         }
-
-        if (mask & IN_ACCESS) {
-            std::lock_guard<std::mutex> lock(command_mutex);
-            hold_file(filename);
-
-        } else if (mask & IN_CLOSE_WRITE) {
-
-            std::lock_guard<std::mutex> lock(command_mutex);
-            release_file(filename);
-        }
+        
+        std::cout << "Não enviou o arquivo nem deletou\n";
 
 
         // IN_ACCESS <- Quando um arquivo existente for acessado para escrita,
@@ -341,6 +407,7 @@ void run_sync_thread() {
  */
 void run_get_sync_dir_thread() {
     while (true) {
+        std::cout << "run get\n";
         std::this_thread::sleep_for(std::chrono::seconds(5));
         std::lock_guard<std::mutex> lock(command_mutex);
         check_server();
@@ -850,7 +917,7 @@ void send_delete_command(std::string filename) {
  * ----------------------------------------------------------------------------
  */
 void sync_client() {
-
+    std::cout << "sync_client\n";
     // Obtém a lista de arquivos do servidor.
     std::vector<FileInfo> server_files = get_server_files();
 
@@ -882,7 +949,7 @@ void sync_client() {
             files_to_send_to_server.insert(filename.string());
         }
     }
-
+std::cout << "sync_client2\n";
     // Determina quais arquivos enviar para o servidor.
     fs::directory_iterator end_iter;
     fs::directory_iterator dir_iter(user_dir);
@@ -903,6 +970,7 @@ void sync_client() {
     //std::cout << "\n\nArquivo para enviar para o servidor\n";
     for (auto &filename : files_to_send_to_server) {
         //std::cout << "Enviando " << filename << " para o servidor\n";
+        std::cout << "sync_client3" <<filename<< "\n"; ;
         send_file(filename);
     }
 }
@@ -922,7 +990,7 @@ void sync_client() {
  */
 void check_server() {
     const Command command = IsAlive;
-
+    std::cout << "check server\n";
     if (socket_ok) {
         // Testa se consegue escrever no socket.
         if (write_socket(ssl, (const void *) &command, sizeof(command))) {
@@ -931,14 +999,22 @@ void check_server() {
         }
     }
 
+counter:
+    int count = 0;
+
     // Aguardaremos alguns instantes;
     //std::lock_guard<std::mutex> lock(command_mutex);
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::this_thread::sleep_for(std::chrono::seconds(5));
 
     //std::cout << "Servidor caiu, tentando conectar com outro servidor\n";
 
     // Caso não seja possível escrever, podemos afirmar que o servidor está fora do ar.
+
     if (connect_servers(user_id, &socket_fd, &ssl) == ConnectionResult::Error) {
+        if (count < 3) {
+            ++count;
+            goto counter;
+        }
         std::cerr << "Não há nenhum servidor disponível\nEncerrando\n";
         std::exit(1);
     }
@@ -961,16 +1037,19 @@ void check_server() {
  */
 void sigpipe_handler() {
     socket_ok = false;
+    command_mutex.unlock();
     //std::cerr << "SIGPIPE caught\n";
     //close(socket_fd);
 }
 
 void hold_file(std::string filename) {
     Command command = Hold;
-    write_socket(socket_fd, (const void *) &command, sizeof(command));
+    write_socket(ssl, (const void *) &command, sizeof(command));
+    send_string(ssl, filename);
 }
 
 void release_file(std::string filename) {
     Command command = Release;
-    write_socket(socket_fd, (const void *) &command, sizeof(command));
+    write_socket(ssl, (const void *) &command, sizeof(command));
+    send_string(ssl, filename);
 }
