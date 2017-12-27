@@ -367,21 +367,15 @@ void run_sync_thread() {
                 send_file(event.path.string());
             }
         } else {
-
-            /*
             if (mask & IN_ACCESS) {
-                if (fs::is_regular_file(event.path)) {
-                    std::lock_guard<std::mutex> lock(command_mutex);
-                    hold_file(filename);
-                }
+                std::cout << "In access do " << filename << "\n";
+                //std::lock_guard<std::mutex> lock(command_mutex);
+                //hold_file(filename);
             } else if (mask & IN_CLOSE_WRITE) {
-                if (fs::is_regular_file(event.path)) {
-                    std::lock_guard<std::mutex> lock(command_mutex);
-                    release_file(filename);
-                }
+                std::cout << "In close write " << filename << "\n";
+                //std::lock_guard<std::mutex> lock(command_mutex);
+                //release_file(filename);
             }
-            */
-
         }
         
         std::cout << "Não enviou o arquivo nem deletou\n";

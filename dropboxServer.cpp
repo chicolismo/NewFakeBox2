@@ -492,12 +492,12 @@ void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
     time_t time;
     read_socket(client_ssl, (void *) &time, sizeof(time));
 
-    // Apenas o cliente com o token pode enviar arquivos.
-    //FileInfo *fi = get_file_info(user_id, filename);
-    //if (fi->holder != client_ssl && fi->holder != nullptr) {
-    //    send_bool(client_ssl, false);
-    //    return;
-    //}
+    // Se alguém tem o token do arquivo, temos que testar.
+    FileInfo *file_info = get_file_info(user_id, filename);
+    if (file_info != nullptr && file_info->holder != nullptr && file_info->holder != client_ssl) {
+        send_bool(client_ssl, false);
+        return;
+    }
 
     // Temos que ver se o arquivo existe e se é mais antigo e se devemos recebê-lo.
     bool should_download = !(fs::exists(absolute_path) && (fs::last_write_time(absolute_path) >= time));
@@ -694,11 +694,10 @@ void delete_file(std::string user_id, std::string filename, SSL *client_ssl) {
     }
 
     // Apenas o cliente com o token pode excluir arquivos.
-    //FileInfo *fi = get_file_info(user_id, filename);
-    //if (fi->holder != client_ssl && fi->holder != nullptr) {
-    //    return;
-    //}
-
+    FileInfo *file_info = get_file_info(user_id, filename);
+    if (file_info != nullptr && file_info->holder != nullptr && file_info->holder != client_ssl) {
+        return;
+    }
 
     fs::path user_dir(user_id);
     fs::path file_path(filename);
@@ -1219,23 +1218,27 @@ FileInfo *get_file_info(std::string user_id, std::string filename) {
 
 
 void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename) {
-    lock_user(user_id);
-
     FileInfo *fi = get_file_info(std::move(user_id), std::move(filename));
+    if (fi == nullptr) {
+        std::cerr << "Tentando obter token de arquivo não existente: " << filename << "\n";
+        return;
+    }
+    
     if (fi->holder == nullptr) {
         fi->holder = client_ssl;
     }
-
-    unlock_user(user_id);
 }
 
 void release_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename) {
-    lock_user(user_id);
-
     FileInfo *fi = get_file_info(std::move(user_id), std::move(filename));
+    if (fi == nullptr) {
+        std::cerr << "Tentando liberar token de arquivo não existente: " << filename << "\n";
+        return;
+    }
+    
     if (fi->holder == client_ssl) {
         fi->holder = nullptr;
     }
-
-    unlock_user(user_id);
 }
+
+
