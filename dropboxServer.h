@@ -32,7 +32,7 @@ public:
 void initialize_clients();
 void create_user_dir(std::string user_id);
 void update_files(std::string user_id, std::string filename, size_t file_size, time_t timestamp);
-bool connect_client(const std::string &user_id, SSL *client_ssl);
+bool connect_client(const std::string &user_id, int client_socket_fd, SSL *client_ssl);
 void disconnect_client(const std::string &user_id, SSL *client_ssl, int client_socket_fd);
 void sync_server(std::string user_id, SSL *client_ssl);
 void receive_file(std::string user_id, std::string filename, SSL *client_ssl);

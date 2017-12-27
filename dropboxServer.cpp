@@ -214,7 +214,7 @@ void run_normal_thread(SSL *client_ssl, int client_socket_fd) {
         is_connected = false;
     }
     else {
-        is_connected = connect_client(user_id, client_ssl);
+        is_connected = connect_client(user_id, client_socket_fd, client_ssl);
     }
     write_socket(client_ssl, (const void *) &is_connected, sizeof(is_connected));
 
@@ -291,7 +291,7 @@ void initialize_clients() {
  * Retorna um booleano indicando o sucesso da conexão.
  * ----------------------------------------------------------------------------
  */
-bool connect_client(const std::string &user_id, SSL *client_ssl) {
+bool connect_client(const std::string &user_id, int client_socket_fd, SSL *client_ssl) {
     // Trava a função para apenas uma thread de cada vez.
     std::lock_guard<std::mutex> lock(connection_mutex);
 
@@ -309,7 +309,7 @@ bool connect_client(const std::string &user_id, SSL *client_ssl) {
         for (auto &device : it->second->connected_devices) {
             if (device == EMPTY_DEVICE) {
                 it->second->is_logged = true;
-                device = (long) &client_ssl;
+                device = client_socket_fd;
                 ok = true;
                 break;
             }
@@ -349,7 +349,7 @@ void disconnect_client(const std::string &user_id, SSL *client_ssl, int client_s
             it->second->connected_devices[0] = EMPTY_DEVICE;
             it->second->is_logged = false;
         }
-        else if (it->second->connected_devices[0] == (long) &client_ssl) {
+        else if (it->second->connected_devices[0] == client_socket_fd) {
             it->second->connected_devices[0] = EMPTY_DEVICE;
         }
         else {

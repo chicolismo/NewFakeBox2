@@ -296,7 +296,7 @@ void run_sync_thread() {
         // O nome do arquivo que causou o evento, sem o caminho absoluto
         std::string filename = event.path.filename().string();
 
-        std::cout << filename << " causou o evento\n";
+        //std::cout << filename << " causou o evento\n";
 
         /*
         if (mask & IN_MOVED_FROM) {
