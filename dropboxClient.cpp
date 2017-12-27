@@ -380,7 +380,7 @@ void run_sync_thread() {
             }
         }
         
-        std::cout << "Não enviou o arquivo nem deletou\n";
+        //std::cout << "Não enviou o arquivo nem deletou\n";
 
 
         // IN_ACCESS <- Quando um arquivo existente for acessado para escrita,
@@ -409,7 +409,7 @@ void run_get_sync_dir_thread() {
         //std::cout << "run get\n";
         std::this_thread::sleep_for(std::chrono::seconds(5));
         std::lock_guard<std::mutex> lock(command_mutex);
-        //check_server();
+        check_server();
         sync_client();
     }
 }
