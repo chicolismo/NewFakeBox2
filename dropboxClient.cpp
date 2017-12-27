@@ -265,7 +265,6 @@ void run_check_server_status_thread() {
  * ----------------------------------------------------------------------------
  */
 void run_sync_thread() {
-
     // Padrão regex de arquivos que não queremos enviar ao servidor, pois são
     // usados pelos programas para armazenar mudanças temporárias nos arquivos
     // que estão sendo manipulados.
@@ -299,6 +298,7 @@ void run_sync_thread() {
 
         std::cout << filename << " causou o evento\n";
 
+        /*
         if (mask & IN_MOVED_FROM) {
             std::cout << "IN_MOVED_FROM\n";
         }
@@ -320,18 +320,17 @@ void run_sync_thread() {
         if (mask & IN_MODIFY) {
             std::cout << "IN_MODIFY\n";
         }
-        /*
         */
 
          // Ignora diretórios.
         if (fs::is_directory(event.path)) {
-            std::cout << "É um diretório -- CONTINUE\n";
+            //std::cout << "É um diretório -- CONTINUE\n";
             continue;
         }
 
         // Não queremos enviar comandos caso o socket não esteja funcionando.
         if (!socket_ok) {
-            std::cout << "Socket não ok -- CONTINUE\n";
+            //std::cout << "Socket não ok -- CONTINUE\n";
             continue;
         }
 
@@ -368,13 +367,13 @@ void run_sync_thread() {
             }
         } else {
             if (mask & IN_ACCESS) {
-                std::cout << "In access do " << filename << "\n";
-                //std::lock_guard<std::mutex> lock(command_mutex);
-                //hold_file(filename);
+                //std::cout << "In access do " << filename << "\n";
+                std::lock_guard<std::mutex> lock(command_mutex);
+                hold_file(filename);
             } else if (mask & IN_CLOSE_WRITE) {
-                std::cout << "In close write " << filename << "\n";
-                //std::lock_guard<std::mutex> lock(command_mutex);
-                //release_file(filename);
+                //std::cout << "In close write " << filename << "\n";
+                std::lock_guard<std::mutex> lock(command_mutex);
+                release_file(filename);
             }
         }
         
@@ -401,10 +400,13 @@ void run_sync_thread() {
  */
 void run_get_sync_dir_thread() {
     while (true) {
+        if (!socket_ok) {
+            continue;
+        }
         std::cout << "run get\n";
         std::this_thread::sleep_for(std::chrono::seconds(5));
         std::lock_guard<std::mutex> lock(command_mutex);
-        check_server();
+        //check_server();
         sync_client();
     }
 }

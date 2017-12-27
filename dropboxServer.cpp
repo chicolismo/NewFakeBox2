@@ -1225,6 +1225,7 @@ void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socke
     }
     
     if (fi->holder == nullptr) {
+        std::cout << "Token concedido para " << filename << " " << (long) (client_ssl) << "\n";
         fi->holder = client_ssl;
     }
 }
@@ -1237,6 +1238,7 @@ void release_file_for_client(std::string user_id, SSL *client_ssl, int client_so
     }
     
     if (fi->holder == client_ssl) {
+        std::cout << "Token liberado por " << filename << " " << (long) (client_ssl) << "\n";
         fi->holder = nullptr;
     }
 }
