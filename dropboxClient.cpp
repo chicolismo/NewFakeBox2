@@ -350,21 +350,18 @@ void run_sync_thread() {
         }
 
         if (mask & IN_ACCESS) {
-            //std::cout << "In access do " << filename << "\n";
+            std::cout << "In access do " << filename << "\n";
             std::lock_guard<std::mutex> lock(command_mutex);
-            hold_file(filename);
-            
-        } else if (mask & IN_CLOSE_WRITE) {
-            //std::cout << "In close write " << filename << "\n";
+            hold_file(filename);   
+        }
+        else if (mask & IN_CLOSE_WRITE) {
+            std::cout << "In close write " << filename << "\n";
             std::lock_guard<std::mutex> lock(command_mutex);
             release_file(filename);
         }
-
-
-        if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
+        else if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
             std::cout << "Deletando " << filename << "\n";
             std::lock_guard<std::mutex> lock(command_mutex);
-
             send_delete_command(filename);
         }
         else if (mask & IN_MOVED_TO || mask & IN_CREATE || mask & IN_MODIFY) {

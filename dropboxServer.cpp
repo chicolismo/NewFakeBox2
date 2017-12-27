@@ -494,7 +494,7 @@ void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
 
     // Se alguém tem o token do arquivo, temos que testar.
     FileInfo *file_info = get_file_info(user_id, filename);
-    if (file_info != nullptr && file_info->holder != nullptr && file_info->holder != client_ssl) {
+    if (!(file_info == nullptr || file_info->holder == nullptr  || file_info->holder == client_ssl)) {
         send_bool(client_ssl, false);
         return;
     }
@@ -695,7 +695,7 @@ void delete_file(std::string user_id, std::string filename, SSL *client_ssl) {
 
     // Apenas o cliente com o token pode excluir arquivos.
     FileInfo *file_info = get_file_info(user_id, filename);
-    if (file_info != nullptr && file_info->holder != nullptr && file_info->holder != client_ssl) {
+    if (!(file_info == nullptr || file_info->holder == nullptr || file_info->holder == client_ssl)) {
         return;
     }
 
