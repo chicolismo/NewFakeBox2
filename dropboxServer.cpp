@@ -406,7 +406,7 @@ void run_user_interface(const std::string user_id, SSL *client_ssl, int client_s
         read_socket(client_ssl, (void *) &command, sizeof(command));
 
         // uma vez recebido o comando, devemos travar o usuário
-        lock_user(user_id);
+        //lock_user(user_id);
 
         std::string filename{};
 
@@ -460,7 +460,7 @@ void run_user_interface(const std::string user_id, SSL *client_ssl, int client_s
                 break;
         }
 
-        unlock_user(user_id);
+        //unlock_user(user_id);
     }
     while (command != Exit);
 }
