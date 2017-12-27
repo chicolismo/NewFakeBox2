@@ -965,7 +965,7 @@ std::vector<Replica*> read_replicas() {
 
 void run_connect_to_other_servers_thread() {
     while (true) {
-        std::cout << "Sou master: " << (primary ? "Sim" : "Não") << "\n";
+        //std::cout << "Sou master: " << (primary ? "Sim" : "Não") << "\n";
 
         int actives = 0;
         for (auto &replica : replicas) {
