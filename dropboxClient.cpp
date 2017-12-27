@@ -348,7 +348,8 @@ void run_sync_thread() {
             	continue;
         	}
         }
-
+        
+        /*
         if (mask & IN_ACCESS) {
             std::cout << "In access do " << filename << "\n";
             std::lock_guard<std::mutex> lock(command_mutex);
@@ -359,7 +360,8 @@ void run_sync_thread() {
             std::lock_guard<std::mutex> lock(command_mutex);
             release_file(filename);
         }
-        else if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
+        */
+        if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
             std::cout << "Deletando " << filename << "\n";
             std::lock_guard<std::mutex> lock(command_mutex);
             send_delete_command(filename);
@@ -372,7 +374,9 @@ void run_sync_thread() {
                 std::lock_guard<std::mutex> lock(command_mutex);
                 // O caminho absoluto é necessário na hora de enviar arquivos.
 
-                send_file(event.path.string());
+                hold_file(filename);
+                send_file(event.path.string(), true);
+                release_file(filename);
             }
         }
         
@@ -588,6 +592,10 @@ void run_interface() {
  * ----------------------------------------------------------------------------
  */
 void send_file(std::string absolute_filename) {
+    send_file(absolute_filename, false); 
+}
+
+void send_file(std::string absolute_filename, bool notify) {
     ssize_t bytes;
     FILE *file;
 
@@ -603,6 +611,17 @@ void send_file(std::string absolute_filename) {
             // Envia o nome do arquivo
             std::string filename = absolute_path.filename().string();
             send_string(ssl, filename);
+            
+            send_bool(ssl, notify);
+            
+            if (notify) {
+                std::cout << "NOTIFY\n";
+                bool notify_ok = read_bool(ssl);
+                if (!notify_ok) {
+                    std::cout << "Voce não tem o ticket do arquivo " << absolute_filename << "\n";
+                    return;
+                }
+            }
 
             // Envia o tanho do arquivo
             size_t file_size = fs::file_size(absolute_path);

@@ -23,6 +23,7 @@ std::vector<FileInfo> get_server_files();
 ConnectionResult connect_server(std::string host, uint16_t port, SSL_CTX *context);
 void sync_client();
 void send_file(std::string filename);
+void send_file(std::string filename, bool notify);
 void get_file(std::string filename);
 void delete_file(std::string filename);
 void send_delete_command(std::string filename);

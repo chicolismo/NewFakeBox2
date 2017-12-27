@@ -477,6 +477,20 @@ void run_user_interface(const std::string user_id, SSL *client_ssl, int client_s
  * servidor ou seja mais recente, uma notificação para enviar o arquivo será
  * enviada ao cliente.  Depois a função tentará abrir o arquivo.  O sucesso ou * não da abertura do arquivo é informado ao cliente.  Em caso de sucesso na * hora de abrir o arquivo ele será recebido do cliente.  * ----------------------------------------------------------------------------- */
 void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
+    bool notify = read_bool(client_ssl);
+    
+    if (notify) {
+        FileInfo *fi = get_file_info(user_id, filename);
+        if (fi != nullptr && fi->holder == client_ssl) {
+            send_bool(client_ssl, true);
+            std::cout << "Pode receber, cliente está como o token\n";
+        }
+        else {
+            send_bool(client_ssl, false);
+            std::cout << "Não pode receber, cliente não tem o token\n";
+            return;
+        }
+    }
 
     fs::path absolute_path = server_dir / fs::path(user_id) / fs::path(filename);
 
@@ -1218,6 +1232,9 @@ FileInfo *get_file_info(std::string user_id, std::string filename) {
 
 
 void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename) {
+
+    std::cout << "Start Hold lock user " << filename << "\n";
+    
     FileInfo *fi = get_file_info(user_id, filename);
     
     if (fi == nullptr) {
@@ -1229,9 +1246,15 @@ void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socke
         std::cout << "Token concedido para " << filename << " " << (long) (client_ssl) << "\n";
         fi->holder = client_ssl;
     }
+    
+    std::cout << "End Hold lock user " << filename << "\n";
 }
 
 void release_file_for_client(std::string user_id, SSL *client_ssl, int client_socket_fd, std::string filename) {
+
+    std::cout << "Start Release lock user " << filename << "\n";
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+
     FileInfo *fi = get_file_info(user_id, filename);
     
     if (fi == nullptr) {
@@ -1243,6 +1266,8 @@ void release_file_for_client(std::string user_id, SSL *client_ssl, int client_so
         std::cout << "Token liberado por " << filename << " " << (long) (client_ssl) << "\n";
         fi->holder = nullptr;
     }
+    
+    std::cout << "End Release lock user " << filename << "\n";
 }
 
 
