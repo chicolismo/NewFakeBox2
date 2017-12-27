@@ -1237,12 +1237,7 @@ void hold_file_for_client(std::string user_id, SSL *client_ssl, int client_socke
     
     FileInfo *fi = get_file_info(user_id, filename);
     
-    if (fi == nullptr) {
-        std::cerr << "Tentando obter token de arquivo não existente: " << filename << "\n";
-        return;
-    }
-    
-    if (fi->holder == nullptr) {
+    if (fi != nullptr && fi->holder == nullptr) {
         std::cout << "Token concedido para " << filename << " " << (long) (client_ssl) << "\n";
         fi->holder = client_ssl;
     }
@@ -1257,12 +1252,7 @@ void release_file_for_client(std::string user_id, SSL *client_ssl, int client_so
 
     FileInfo *fi = get_file_info(user_id, filename);
     
-    if (fi == nullptr) {
-        std::cerr << "Tentando liberar token de arquivo não existente: " << filename << "\n";
-        return;
-    }
-    
-    if (fi->holder == client_ssl) {
+    if (fi != nullptr && fi->holder == client_ssl) {
         std::cout << "Token liberado por " << filename << " " << (long) (client_ssl) << "\n";
         fi->holder = nullptr;
     }
