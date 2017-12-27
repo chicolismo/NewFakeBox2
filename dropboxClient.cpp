@@ -349,6 +349,18 @@ void run_sync_thread() {
         	}
         }
 
+        if (mask & IN_ACCESS) {
+            //std::cout << "In access do " << filename << "\n";
+            std::lock_guard<std::mutex> lock(command_mutex);
+            hold_file(filename);
+            
+        } else if (mask & IN_CLOSE_WRITE) {
+            //std::cout << "In close write " << filename << "\n";
+            std::lock_guard<std::mutex> lock(command_mutex);
+            release_file(filename);
+        }
+
+
         if (mask & IN_MOVED_FROM || mask & IN_DELETE) {
             std::cout << "Deletando " << filename << "\n";
             std::lock_guard<std::mutex> lock(command_mutex);
@@ -364,16 +376,6 @@ void run_sync_thread() {
                 // O caminho absoluto é necessário na hora de enviar arquivos.
 
                 send_file(event.path.string());
-            }
-        } else {
-            if (mask & IN_ACCESS) {
-                //std::cout << "In access do " << filename << "\n";
-                std::lock_guard<std::mutex> lock(command_mutex);
-                hold_file(filename);
-            } else if (mask & IN_CLOSE_WRITE) {
-                //std::cout << "In close write " << filename << "\n";
-                std::lock_guard<std::mutex> lock(command_mutex);
-                release_file(filename);
             }
         }
         
@@ -403,7 +405,7 @@ void run_get_sync_dir_thread() {
         if (!socket_ok) {
             continue;
         }
-        std::cout << "run get\n";
+        //std::cout << "run get\n";
         std::this_thread::sleep_for(std::chrono::seconds(5));
         std::lock_guard<std::mutex> lock(command_mutex);
         //check_server();
@@ -913,7 +915,7 @@ void send_delete_command(std::string filename) {
  * ----------------------------------------------------------------------------
  */
 void sync_client() {
-    std::cout << "sync_client\n";
+    //std::cout << "sync_client\n";
     // Obtém a lista de arquivos do servidor.
     std::vector<FileInfo> server_files = get_server_files();
 
@@ -945,7 +947,7 @@ void sync_client() {
             files_to_send_to_server.insert(filename.string());
         }
     }
-std::cout << "sync_client2\n";
+    //std::cout << "sync_client2\n";
     // Determina quais arquivos enviar para o servidor.
     fs::directory_iterator end_iter;
     fs::directory_iterator dir_iter(user_dir);
@@ -966,7 +968,7 @@ std::cout << "sync_client2\n";
     //std::cout << "\n\nArquivo para enviar para o servidor\n";
     for (auto &filename : files_to_send_to_server) {
         //std::cout << "Enviando " << filename << " para o servidor\n";
-        std::cout << "sync_client3" <<filename<< "\n"; ;
+        //std::cout << "sync_client3" <<filename<< "\n"; ;
         send_file(filename);
     }
 }
@@ -986,7 +988,7 @@ std::cout << "sync_client2\n";
  */
 void check_server() {
     const Command command = IsAlive;
-    std::cout << "check server\n";
+    //std::cout << "check server\n";
     if (socket_ok) {
         // Testa se consegue escrever no socket.
         if (write_socket(ssl, (const void *) &command, sizeof(command))) {
