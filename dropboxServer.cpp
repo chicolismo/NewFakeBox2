@@ -475,7 +475,11 @@ void run_user_interface(const std::string user_id, SSL *client_ssl, int client_s
  * Uma vez que o nome do arquivo foi fornecido, essa função recebe o tamanho do
  * arquivo em bytes e a data de modificação.  Caso o arquivo não exista no
  * servidor ou seja mais recente, uma notificação para enviar o arquivo será
- * enviada ao cliente.  Depois a função tentará abrir o arquivo.  O sucesso ou * não da abertura do arquivo é informado ao cliente.  Em caso de sucesso na * hora de abrir o arquivo ele será recebido do cliente.  * ----------------------------------------------------------------------------- */
+ * enviada ao cliente.  Depois a função tentará abrir o arquivo.  O sucesso ou
+ * não da abertura do arquivo é informado ao cliente.  Em caso de sucesso na
+ * hora de abrir o arquivo ele será recebido do cliente.
+ * -----------------------------------------------------------------------------
+ */
 void receive_file(std::string user_id, std::string filename, SSL *client_ssl) {
     bool notify = read_bool(client_ssl);
     
